@@ -354,7 +354,7 @@ uv run pytest tests/unit/test_orchestrator/ tests/integration/test_end_to_end.py
 - `winterfox interactive` - Interactive mode
 
 #### 2. `config.py` - Configuration management
-**Purpose**: Load and validate research.toml
+**Purpose**: Load and validate winterfox.toml
 
 #### 3. `export/markdown.py` - Markdown export
 **Purpose**: Human-readable nested markdown with citations
@@ -408,7 +408,7 @@ tests/integration/
 
 1. **README.md** - Getting started, installation, quick example
 2. **docs/getting-started.md** - Comprehensive tutorial
-3. **docs/configuration.md** - research.toml reference
+3. **docs/configuration.md** - winterfox.toml reference
 4. **docs/architecture.md** - System design
 5. **docs/api-reference.md** - Python API docs
 6. **examples/** - Sample research projects
@@ -430,7 +430,7 @@ tests/integration/
 ### Immediate (to get working end-to-end)
 1. **Complete Phase 4: CLI** (1-2 days) **← START HERE**
    - Basic commands (init, cycle, status, export)
-   - Config loading (research.toml)
+   - Config loading (winterfox.toml)
    - Rich terminal output
 
 ### Short Term (testing & polish)

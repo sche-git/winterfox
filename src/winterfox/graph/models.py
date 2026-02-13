@@ -131,7 +131,7 @@ class KnowledgeNode(BaseModel):
                 "children_ids": ["child1", "child2"],
                 "tags": ["market-size", "legal-tech"],
                 "evidence": [],
-                "sources": ["research/raw/cycle_001.json"],
+                "sources": [".winterfox/raw/cycle_001.json"],
                 "created_by_cycle": 1,
                 "updated_by_cycle": 3,
             }

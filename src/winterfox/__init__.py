@@ -10,7 +10,7 @@ Example:
     from winterfox.agents.adapters import AnthropicAdapter
 
     async def main():
-        graph = KnowledgeGraph("research.db")
+        graph = KnowledgeGraph(".winterfox/graph.db")
         await graph.initialize()
 
         agent_pool = AgentPool([

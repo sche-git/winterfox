@@ -73,13 +73,13 @@ winterfox init "Legal Tech SaaS Market Research" \
 ```
 
 This creates:
-- `research.toml` - Configuration file
-- `research.db` - SQLite knowledge graph
-- `research/raw/` - Raw agent outputs
+- `winterfox.toml` - Configuration file
+- `.winterfox/graph.db` - SQLite knowledge graph
+- `.winterfox/raw/` - Raw agent outputs
 
 ### Step 3: Review Configuration
 
-Open `research.toml` in your editor:
+Open `winterfox.toml` in your editor:
 
 ```toml
 [project]
@@ -119,7 +119,7 @@ consensus_boost = 0.15
 similarity_threshold = 0.75
 
 [storage]
-db_path = "research.db"
+db_path = ".winterfox/graph.db"
 git_auto_commit = false  # Set to true if using git
 ```
 
@@ -377,7 +377,7 @@ New findings start with discounted confidence (default: 0.7x):
 
 ### Multi-Agent Consensus
 
-Add multiple agents to your `research.toml`:
+Add multiple agents to your `winterfox.toml`:
 
 ```toml
 # Primary agent: Claude Opus 4.6
@@ -435,7 +435,7 @@ from winterfox.agents.tools import get_research_tools
 
 async def main():
     # Initialize graph
-    graph = KnowledgeGraph("research.db")
+    graph = KnowledgeGraph(".winterfox/graph.db")
     await graph.initialize()
 
     # Add starting question
@@ -508,7 +508,7 @@ source ~/.zshrc
 
 **Solution**:
 1. Check Tavily API key: `echo $TAVILY_API_KEY`
-2. Add fallback provider in `research.toml`:
+2. Add fallback provider in `winterfox.toml`:
    ```toml
    [[search.providers]]
    name = "brave"

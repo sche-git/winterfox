@@ -45,9 +45,9 @@ def init(
     Initialize a new research project.
 
     Creates:
-    - research.toml configuration file
-    - research.db SQLite database
-    - research/ directory for raw outputs
+    - winterfox.toml configuration file
+    - .winterfox/graph.db SQLite database
+    - .winterfox/raw/ directory for raw outputs
 
     Example:
         winterfox init "Legal Tech Market Research"
@@ -57,7 +57,7 @@ def init(
         # Ensure directory exists
         path.mkdir(parents=True, exist_ok=True)
 
-        config_path = path / "research.toml"
+        config_path = path / "winterfox.toml"
 
         # Check if already initialized
         if config_path.exists():
@@ -82,11 +82,11 @@ def init(
         # Initialize database
         from .graph.store import KnowledgeGraph
 
-        db_path = path / "research.db"
+        db_path = path / ".winterfox" / "graph.db"
         asyncio.run(_init_database(db_path))
 
         # Create directories
-        (path / "research" / "raw").mkdir(parents=True, exist_ok=True)
+        (path / ".winterfox" / "raw").mkdir(parents=True, exist_ok=True)
 
         # Success message
         console.print(Panel.fit(
@@ -95,7 +95,7 @@ def init(
             f"Database: {db_path}\n\n"
             "[dim]Next steps:[/dim]\n"
             "1. Set API keys in environment (ANTHROPIC_API_KEY, TAVILY_API_KEY, etc.)\n"
-            "2. Edit research.toml to configure agents and search providers\n"
+            "2. Edit winterfox.toml to configure agents and search providers\n"
             "3. Run your first cycle: winterfox cycle",
             title="Project Initialized",
             border_style="green",
@@ -119,7 +119,7 @@ async def _init_database(db_path: Path) -> None:
 def cycle(
     n: int = typer.Option(1, "--count", "-n", help="Number of cycles to run"),
     focus: Optional[str] = typer.Option(None, "--focus", "-f", help="Specific node ID to research"),
-    config: Path = typer.Option(Path("research.toml"), "--config", "-c", help="Config file path"),
+    config: Path = typer.Option(Path("winterfox.toml"), "--config", "-c", help="Config file path"),
     log_level: str = typer.Option("INFO", "--log-level", "-l", help="Log level"),
     no_consensus: bool = typer.Option(False, "--no-consensus", help="Disable multi-agent consensus"),
 ) -> None:
@@ -199,13 +199,13 @@ async def _run_cycles(
                 model=agent_config.model,
                 api_key=api_key if not agent_config.use_subscription else None,
                 use_subscription=agent_config.use_subscription,
-                timeout_seconds=agent_config.timeout_seconds,
+                timeout=agent_config.timeout_seconds,
             )
         elif agent_config.provider == "moonshot":
             adapter = KimiAdapter(
                 model=agent_config.model,
                 api_key=api_key,
-                timeout_seconds=agent_config.timeout_seconds,
+                timeout=agent_config.timeout_seconds,
             )
         else:
             console.print(f"[yellow]Warning: Unsupported provider {agent_config.provider}, skipping[/yellow]")
@@ -214,6 +214,44 @@ async def _run_cycles(
         adapters.append(adapter)
 
     agent_pool = AgentPool(adapters)
+
+    # Initialize search providers
+    from .agents.tools.search import configure_search
+    from .agents.tools.search.brave import BraveSearchProvider
+    from .agents.tools.search.tavily import TavilySearchProvider
+    from .agents.tools.search.serper import SerperSearchProvider
+
+    search_api_keys = config.get_search_api_keys()
+    search_providers = []
+
+    provider_classes = {
+        "tavily": TavilySearchProvider,
+        "brave": BraveSearchProvider,
+        "serper": SerperSearchProvider,
+    }
+
+    for provider_config in sorted(config.search.providers, key=lambda p: p.priority):
+        if not provider_config.enabled:
+            continue
+        api_key = search_api_keys.get(provider_config.name)
+        if api_key is None and provider_config.name != "duckduckgo":
+            console.print(
+                f"[yellow]Warning: No API key for {provider_config.name}, skipping[/yellow]"
+            )
+            continue
+        cls = provider_classes.get(provider_config.name)
+        if cls is None:
+            console.print(
+                f"[yellow]Warning: Unsupported search provider {provider_config.name}, skipping[/yellow]"
+            )
+            continue
+        search_providers.append(cls(api_key=api_key))
+
+    if not search_providers:
+        console.print("[red]Error: No search providers configured. Check API keys.[/red]")
+        raise typer.Exit(1)
+
+    configure_search(search_providers, fallback_enabled=config.search.fallback_enabled)
 
     # Initialize tools
     from .agents.tools import get_research_tools
@@ -273,7 +311,7 @@ async def _run_cycles(
 
 @app.command()
 def status(
-    config: Path = typer.Option(Path("research.toml"), "--config", "-c", help="Config file path"),
+    config: Path = typer.Option(Path("winterfox.toml"), "--config", "-c", help="Config file path"),
     max_depth: int = typer.Option(3, "--depth", "-d", help="Maximum tree depth"),
 ) -> None:
     """
@@ -339,7 +377,7 @@ async def _show_status(config_path: Path, max_depth: int) -> None:
 @app.command()
 def show(
     node_id: str = typer.Argument(..., help="Node ID to display"),
-    config: Path = typer.Option(Path("research.toml"), "--config", "-c", help="Config file path"),
+    config: Path = typer.Option(Path("winterfox.toml"), "--config", "-c", help="Config file path"),
     depth: int = typer.Option(2, "--depth", "-d", help="Children depth to show"),
 ) -> None:
     """
@@ -392,7 +430,7 @@ async def _show_node(config_path: Path, node_id: str, depth: int) -> None:
 def export(
     output: Path = typer.Argument(..., help="Output file path"),
     format: str = typer.Option("markdown", "--format", "-f", help="Format: markdown or json"),
-    config: Path = typer.Option(Path("research.toml"), "--config", "-c", help="Config file path"),
+    config: Path = typer.Option(Path("winterfox.toml"), "--config", "-c", help="Config file path"),
     no_evidence: bool = typer.Option(False, "--no-evidence", help="Exclude evidence citations"),
 ) -> None:
     """
@@ -453,7 +491,7 @@ async def _export_graph(
 
 @app.command()
 def interactive(
-    config: Path = typer.Option(Path("research.toml"), "--config", "-c", help="Config file path"),
+    config: Path = typer.Option(Path("winterfox.toml"), "--config", "-c", help="Config file path"),
     log_level: str = typer.Option("INFO", "--log-level", "-l", help="Log level"),
 ) -> None:
     """

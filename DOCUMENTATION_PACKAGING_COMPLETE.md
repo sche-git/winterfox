@@ -166,7 +166,7 @@ Complete market research example:
 - Tips for customization
 - Real-world usage notes
 
-**research.toml** (~150 lines):
+**winterfox.toml** (~150 lines):
 - Fully documented configuration
 - Legal tech SaaS market research
 - Multi-agent setup (Claude + Kimi)
@@ -196,7 +196,7 @@ Complete market research example:
 | docs/GETTING_STARTED.md | 500 | Step-by-step tutorial |
 | docs/CONFIGURATION.md | 650 | Complete config reference |
 | examples/market-research/README.md | 300 | Example project guide |
-| examples/market-research/research.toml | 150 | Example configuration |
+| examples/market-research/winterfox.toml | 150 | Example configuration |
 
 **Total**: 7 new files, ~1,970 lines of documentation
 

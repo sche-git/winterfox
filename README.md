@@ -28,7 +28,7 @@ Winterfox is an open-source Python package that runs autonomous research cycles,
 uv pip install winterfox
 
 # Or using pip
-pip install winterfox
+pip install -e .
 ```
 
 ### Initialize Your First Project
@@ -110,7 +110,7 @@ Winterfox consists of 4 main components:
 
 ## Configuration
 
-Edit `research.toml` to configure your research project:
+Edit `winterfox.toml` to configure your research project:
 
 ```toml
 [project]
@@ -150,7 +150,7 @@ consensus_boost = 0.15
 similarity_threshold = 0.75
 
 [storage]
-db_path = "research.db"
+db_path = ".winterfox/graph.db"
 git_auto_commit = true
 ```
 
@@ -165,9 +165,9 @@ winterfox init "AI Startups" --north-star "Research AI startup landscape"
 ```
 
 Creates:
-- `research.toml` - Configuration file
-- `research.db` - SQLite database
-- `research/raw/` - Raw agent outputs
+- `winterfox.toml` - Configuration file
+- `.winterfox/graph.db` - SQLite database
+- `.winterfox/raw/` - Raw agent outputs
 
 ### `winterfox cycle`
 Run research cycles.
@@ -223,7 +223,7 @@ from winterfox.agents.tools import get_research_tools
 
 async def main():
     # Initialize graph
-    graph = KnowledgeGraph("research.db")
+    graph = KnowledgeGraph(".winterfox/graph.db")
     await graph.initialize()
 
     # Create initial research question

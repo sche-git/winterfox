@@ -8,6 +8,7 @@ Supports:
 - Tool use with max 30 iterations
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -385,5 +386,3 @@ tool for simple factual lookups or when you need structured results.
         return searches
 
 
-# Import asyncio for tool execution check
-import asyncio

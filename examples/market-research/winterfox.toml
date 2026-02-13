@@ -136,10 +136,10 @@ similarity_threshold = 0.75
 
 [storage]
 # SQLite database for knowledge graph
-db_path = "research.db"
+db_path = ".winterfox/graph.db"
 
 # Directory for raw agent outputs (for debugging)
-raw_output_dir = "research/raw"
+raw_output_dir = ".winterfox/raw"
 
 # Git integration (optional)
 git_auto_commit = false  # Set true if using git for version control
@@ -164,7 +164,7 @@ enforce_isolation = false
 #
 # 2. Initialize project:
 #    winterfox init "Legal Tech Research" --north-star "See above"
-#    (or copy this file to your project directory as research.toml)
+#    (or copy this file to your project directory as winterfox.toml)
 #
 # 3. Run research:
 #    winterfox cycle -n 10  # Run 10 cycles

@@ -1,6 +1,6 @@
 # Configuration Reference
 
-Complete reference for `research.toml` configuration file.
+Complete reference for `winterfox.toml` configuration file.
 
 ## Table of Contents
 
@@ -363,8 +363,8 @@ Uses Jaccard similarity: `|A ∩ B| / |A ∪ B|`
 
 ```toml
 [storage]
-db_path = "research.db"
-raw_output_dir = "research/raw"
+db_path = ".winterfox/graph.db"
+raw_output_dir = ".winterfox/raw"
 git_auto_commit = false
 git_auto_push = false
 ```
@@ -373,8 +373,8 @@ git_auto_push = false
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `db_path` | string | "research.db" | SQLite database file path |
-| `raw_output_dir` | string | "research/raw" | Directory for raw agent outputs (for debugging) |
+| `db_path` | string | ".winterfox/graph.db" | SQLite database file path |
+| `raw_output_dir` | string | ".winterfox/raw" | Directory for raw agent outputs (for debugging) |
 | `git_auto_commit` | bool | false | Auto-commit after each cycle |
 | `git_auto_push` | bool | false | Auto-push to remote (requires git_auto_commit) |
 
@@ -382,7 +382,7 @@ git_auto_push = false
 
 ```toml
 [storage]
-db_path = "research.db"
+db_path = ".winterfox/graph.db"
 git_auto_commit = true  # Commit after each cycle
 git_auto_push = false  # Don't push (manual control)
 ```
@@ -509,8 +509,8 @@ similarity_threshold = 0.75  # Standard deduplication
 # ============================================================
 
 [storage]
-db_path = "research.db"
-raw_output_dir = "research/raw"
+db_path = ".winterfox/graph.db"
+raw_output_dir = ".winterfox/raw"
 git_auto_commit = true  # Auto-commit for history tracking
 git_auto_push = false  # Manual push for review
 

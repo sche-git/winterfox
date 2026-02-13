@@ -22,7 +22,7 @@ mkdir legal-tech-research
 cd legal-tech-research
 
 # 2. Copy this configuration
-cp examples/market-research/research.toml .
+cp examples/market-research/winterfox.toml .
 
 # 3. Set API keys
 export ANTHROPIC_API_KEY="sk-ant-..."

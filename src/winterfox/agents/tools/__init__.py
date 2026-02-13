@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 from .search import SearchManager, web_search
 from .web_fetch import web_fetch
-from .graph_tools import read_graph_node, search_graph, note_finding
+from .graph_tools import read_graph_node, search_graph, note_finding, set_graph_context
 
 if TYPE_CHECKING:
     from ...graph.store import KnowledgeGraph
@@ -33,8 +33,7 @@ def get_research_tools(graph: "KnowledgeGraph") -> list["ToolDefinition"]:
     """
     from ..protocol import ToolDefinition
 
-    # TODO: Implement actual tool definitions with execute functions
-    # This is a placeholder until we implement the full tool registry
+    set_graph_context(graph)
 
     tools = [
         ToolDefinition(
@@ -72,7 +71,7 @@ def get_research_tools(graph: "KnowledgeGraph") -> list["ToolDefinition"]:
                 },
                 "required": ["node_id"],
             },
-            execute=lambda node_id: read_graph_node(graph, node_id),
+            execute=lambda node_id: read_graph_node(node_id),
         ),
         ToolDefinition(
             name="search_graph",
@@ -85,7 +84,7 @@ def get_research_tools(graph: "KnowledgeGraph") -> list["ToolDefinition"]:
                 },
                 "required": ["query"],
             },
-            execute=lambda query, limit=5: search_graph(graph, query, limit),
+            execute=lambda query, limit=5: search_graph(query, limit),
         ),
         ToolDefinition(
             name="note_finding",

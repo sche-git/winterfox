@@ -351,8 +351,8 @@ confidence_discount = 0.7  # Initial skepticism (0.0 = trust, 1.0 = skeptical)
 consensus_boost = 0.15  # Confidence boost for agreement
 
 [storage]
-db_path = "research.db"
-raw_output_dir = "research/raw"
+db_path = ".winterfox/graph.db"
+raw_output_dir = ".winterfox/raw"
 git_auto_commit = true
 
 [multi_tenancy]
@@ -364,7 +364,7 @@ workspace_id = "default"
 ```python
 from winterfox.config import ResearchConfig
 
-config = ResearchConfig.from_toml("research.toml")
+config = ResearchConfig.from_toml("winterfox.toml")
 # Pydantic validates all fields, API keys, etc.
 ```
 
@@ -556,18 +556,18 @@ class SearchProviderConfig(BaseModel):
 
 1. **Check cycle metadata**:
 ```bash
-sqlite3 research.db "SELECT * FROM cycles ORDER BY started_at DESC LIMIT 1"
+sqlite3 .winterfox/graph.db "SELECT * FROM cycles ORDER BY started_at DESC LIMIT 1"
 ```
 
 2. **Check raw agent outputs**:
 ```bash
-ls -lt research/raw/  # Find latest cycle
-cat research/raw/cycle_123_agent_claude-opus-4.json
+ls -lt .winterfox/raw/  # Find latest cycle
+cat .winterfox/raw/cycle_123_agent_claude-opus-4.json
 ```
 
 3. **Check graph operations**:
 ```bash
-sqlite3 research.db "SELECT * FROM graph_operations WHERE cycle_id = 123"
+sqlite3 .winterfox/graph.db "SELECT * FROM graph_operations WHERE cycle_id = 123"
 ```
 
 4. **Run with verbose logging**:

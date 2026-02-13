@@ -1,7 +1,7 @@
 """
 Configuration loading and validation for winterfox.
 
-Loads research.toml files and validates settings using Pydantic.
+Loads winterfox.toml files and validates settings using Pydantic.
 """
 
 import os
@@ -71,8 +71,8 @@ class OrchestratorConfig(BaseModel):
 class StorageConfig(BaseModel):
     """Storage configuration."""
 
-    db_path: Path = Path("research.db")
-    raw_output_dir: Path = Path("research/raw")
+    db_path: Path = Path(".winterfox/graph.db")
+    raw_output_dir: Path = Path(".winterfox/raw")
     git_auto_commit: bool = True
     git_auto_push: bool = False
 
@@ -196,7 +196,7 @@ def load_config(config_path: Path) -> ResearchConfig:
     Load research configuration from TOML file.
 
     Args:
-        config_path: Path to research.toml
+        config_path: Path to winterfox.toml
 
     Returns:
         Validated ResearchConfig
@@ -223,10 +223,10 @@ def load_config(config_path: Path) -> ResearchConfig:
 
 def create_default_config(output_path: Path, project_name: str, north_star: str) -> None:
     """
-    Create a default research.toml configuration file.
+    Create a default winterfox.toml configuration file.
 
     Args:
-        output_path: Where to write research.toml
+        output_path: Where to write winterfox.toml
         project_name: Project name
         north_star: North star mission statement
     """
@@ -279,8 +279,8 @@ consensus_boost = 0.15
 similarity_threshold = 0.75
 
 [storage]
-db_path = "research.db"
-raw_output_dir = "research/raw"
+db_path = ".winterfox/graph.db"
+raw_output_dir = ".winterfox/raw"
 git_auto_commit = true
 git_auto_push = false
 
