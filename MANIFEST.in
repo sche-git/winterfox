@@ -1,0 +1,23 @@
+# Include documentation files
+include README.md
+include LICENSE
+include CHANGELOG.md
+include IMPLEMENTATION_COMPLETE.md
+include PHASE_*.md
+
+# Include configuration examples
+recursive-include examples *.toml *.md
+
+# Include tests (for source distributions)
+recursive-include tests *.py
+
+# Exclude compiled Python files
+global-exclude *.py[cod]
+global-exclude __pycache__
+global-exclude *.so
+global-exclude .DS_Store
+
+# Exclude development files
+exclude .gitignore
+exclude .python-version
+exclude pyproject.toml.bak

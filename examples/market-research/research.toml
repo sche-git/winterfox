@@ -1,0 +1,179 @@
+# Legal Tech SaaS Market Research Configuration
+
+[project]
+name = "Legal Tech SaaS Market Research"
+north_star = """
+Build a legal tech SaaS product for mid-market general counsels.
+
+Target Market:
+- Companies with 100-1000 employees
+- General counsels managing 1-3 person legal teams
+- Annual legal spend: $50k-500k
+
+Research Goals:
+1. Market Opportunity
+   - Total Addressable Market (TAM)
+   - Serviceable Available Market (SAM)
+   - Serviceable Obtainable Market (SOM)
+   - Growth rate and projections (5 years)
+
+2. Competition Analysis
+   - Direct competitors (Harvey AI, CaseText, etc.)
+   - Indirect competitors (Thomson Reuters, LexisNexis)
+   - Feature comparison and positioning
+   - Pricing models and tiers
+   - Funding and market share
+
+3. Buyer Personas
+   - Demographics and role responsibilities
+   - Pain points and challenges
+   - Decision-making process
+   - Budget authority and timeline
+   - Tool preferences and tech stack
+
+4. Product-Market Fit
+   - Critical features for mid-market
+   - Differentiation opportunities
+   - Integration requirements
+   - Compliance and security needs
+
+5. Go-to-Market Strategy
+   - Best channels (content, partners, sales)
+   - Pricing strategy (freemium vs paid)
+   - Customer acquisition cost (CAC) benchmarks
+   - Sales cycle length
+   - Churn rate expectations
+
+Success Criteria:
+- Validated TAM > $10B
+- SAM > $500M
+- Identified 3+ clear differentiation opportunities
+- 2-3 detailed buyer personas
+- Pricing strategy with market validation
+"""
+
+# ============================================================
+# Multi-Agent Setup (Quality + Diversity)
+# ============================================================
+
+# Primary Agent: Claude Opus 4.6 (Best for complex analysis)
+[[agents]]
+provider = "anthropic"
+model = "claude-opus-4-20251120"
+api_key_env = "ANTHROPIC_API_KEY"
+timeout = 300
+max_retries = 3
+supports_native_search = true  # Extended thinking with web search
+use_subscription = false
+
+# Secondary Agent: Kimi 2.5 (Cost-effective, diverse perspective)
+# Uncomment to enable multi-agent consensus
+# [[agents]]
+# provider = "moonshot"
+# model = "kimi-2.5"
+# api_key_env = "MOONSHOT_API_KEY"
+# timeout = 300
+
+# ============================================================
+# Search Configuration (Multi-Provider with Fallback)
+# ============================================================
+
+[search]
+use_llm_native_search = true  # Prefer Claude's extended thinking
+fallback_enabled = true  # Automatic fallback to next provider
+
+# Primary: Tavily (Best for research-grade results)
+[[search.providers]]
+name = "tavily"
+api_key_env = "TAVILY_API_KEY"
+priority = 1
+max_results = 10
+enabled = true
+
+# Fallback 1: Brave (Privacy-focused, free tier available)
+# [[search.providers]]
+# name = "brave"
+# api_key_env = "BRAVE_API_KEY"
+# priority = 2
+# max_results = 8
+# enabled = true
+
+# Fallback 2: DuckDuckGo (Free, always available)
+# [[search.providers]]
+# name = "duckduckgo"
+# priority = 99
+# max_results = 10
+# enabled = true
+
+# ============================================================
+# Orchestrator Settings (Tuned for Market Research)
+# ============================================================
+
+[orchestrator]
+# Search depth: 25 is balanced, increase for thorough research
+max_searches_per_agent = 25
+
+# Agent timeout: 5 minutes per cycle
+agent_timeout_seconds = 300
+
+# Confidence tuning:
+# - Lower discount = more skeptical, requires more evidence
+# - Higher discount = trust initial findings more
+confidence_discount = 0.7
+
+# Consensus boost: Reward when multiple agents agree
+# (Only applies if multiple agents are configured)
+consensus_boost = 0.15
+
+# Deduplication threshold:
+# - Higher = require near-identical claims to merge
+# - Lower = more aggressive deduplication
+similarity_threshold = 0.75
+
+# ============================================================
+# Storage & Git Integration
+# ============================================================
+
+[storage]
+# SQLite database for knowledge graph
+db_path = "research.db"
+
+# Directory for raw agent outputs (for debugging)
+raw_output_dir = "research/raw"
+
+# Git integration (optional)
+git_auto_commit = false  # Set true if using git for version control
+git_auto_push = false  # Set true for automatic backup to remote
+
+# ============================================================
+# Multi-Tenancy (CLI users: ignore this section)
+# ============================================================
+
+[multi_tenancy]
+enabled = false  # Single workspace mode
+workspace_id = "default"
+enforce_isolation = false
+
+# ============================================================
+# Usage Instructions
+# ============================================================
+
+# 1. Set API keys:
+#    export ANTHROPIC_API_KEY="sk-ant-..."
+#    export TAVILY_API_KEY="tvly-..."
+#
+# 2. Initialize project:
+#    winterfox init "Legal Tech Research" --north-star "See above"
+#    (or copy this file to your project directory as research.toml)
+#
+# 3. Run research:
+#    winterfox cycle -n 10  # Run 10 cycles
+#
+# 4. Check progress:
+#    winterfox status
+#
+# 5. Export results:
+#    winterfox export report.md
+#
+# Expected cost: ~$0.125 per cycle = $1.25 for 10 cycles
+# Expected time: ~5-10 minutes for 10 cycles
