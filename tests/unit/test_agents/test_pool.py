@@ -1,18 +1,18 @@
 """
-Tests for AgentPool and multi-agent consensus.
+Tests for AgentPool and multi-agent LLM synthesis.
 
 These tests verify:
 - Parallel agent dispatch
-- Finding grouping by similarity
-- Confidence boosting for consensus
-- Finding merging logic
+- LLM-driven synthesis
+- Primary agent selection
+- Synthesis result format
 """
 
 import pytest
 from datetime import datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from winterfox.agents.pool import AgentPool, ConsensusResult
+from winterfox.agents.pool import AgentPool, SynthesisResult
 from winterfox.agents.protocol import AgentOutput, Finding, Evidence
 
 
@@ -48,36 +48,51 @@ class MockAgent:
 
 
 @pytest.mark.asyncio
-async def test_parallel_dispatch():
-    """Test parallel agent execution."""
-    agent1 = MockAgent(
+async def test_single_agent_dispatch():
+    """Test dispatching single agent."""
+    agent = MockAgent(
         "agent-1",
         [
             Finding(
-                claim="Finding from agent 1",
+                claim="Test claim",
                 confidence=0.8,
-                evidence=[Evidence(text="evidence", source="source")],
+                evidence=[Evidence(text="test", source="source")],
             )
         ],
+    )
+
+    pool = AgentPool([agent])
+
+    outputs = await pool.dispatch(
+        system_prompt="Test system",
+        user_prompt="Test user",
+        tools=[],
+    )
+
+    assert len(outputs) == 1
+    assert outputs[0].agent_name == "agent-1"
+    assert len(outputs[0].findings) == 1
+    assert outputs[0].findings[0].claim == "Test claim"
+
+
+@pytest.mark.asyncio
+async def test_parallel_dispatch():
+    """Test parallel dispatch to multiple agents."""
+    agent1 = MockAgent(
+        "agent-1",
+        [Finding(claim="Finding 1", confidence=0.8, evidence=[])],
     )
 
     agent2 = MockAgent(
         "agent-2",
-        [
-            Finding(
-                claim="Finding from agent 2",
-                confidence=0.85,
-                evidence=[Evidence(text="evidence", source="source")],
-            )
-        ],
+        [Finding(claim="Finding 2", confidence=0.75, evidence=[])],
     )
 
     pool = AgentPool([agent1, agent2])
 
-    # Dispatch to all agents in parallel
     outputs = await pool.dispatch(
-        system_prompt="Test system",
-        user_prompt="Test user",
+        system_prompt="Test",
+        user_prompt="Test",
         tools=[],
     )
 
@@ -87,94 +102,39 @@ async def test_parallel_dispatch():
 
 
 @pytest.mark.asyncio
-async def test_consensus_detection():
-    """Test finding grouping by similarity."""
-    # Two agents with similar findings
-    agent1 = MockAgent(
+async def test_synthesis_single_agent():
+    """Test synthesis with single agent (no actual synthesis needed)."""
+    agent = MockAgent(
         "agent-1",
         [
             Finding(
-                claim="The market is worth $2.3B",
+                claim="Market size is $2.3B",
                 confidence=0.8,
-                evidence=[Evidence(text="evidence1", source="source1")],
+                evidence=[Evidence(text="evidence", source="source")],
             )
         ],
     )
 
-    agent2 = MockAgent(
-        "agent-2",
-        [
-            Finding(
-                claim="Market size is $2.3B",  # Similar to agent1
-                confidence=0.85,
-                evidence=[Evidence(text="evidence2", source="source2")],
-            )
-        ],
-    )
+    pool = AgentPool([agent], primary_agent_index=0)
 
-    pool = AgentPool([agent1, agent2])
-
-    # Dispatch with consensus analysis
-    result = await pool.dispatch_with_consensus(
+    result = await pool.dispatch_with_synthesis(
         system_prompt="Test system",
         user_prompt="Test user",
         tools=[],
-        similarity_threshold=0.5,  # Lower threshold to detect similarity
     )
 
-    # Should detect consensus (2 similar findings merged into 1)
-    assert result.consensus_count > 0
-    assert len(result.findings) == 1  # Merged into single finding
-    assert result.total_cost_usd == 0.02  # 0.01 * 2 agents
+    # Single agent, no synthesis performed
+    assert isinstance(result, SynthesisResult)
+    assert len(result.findings) == 1
+    assert result.findings[0].claim == "Market size is $2.3B"
+    assert result.synthesis_reasoning == "Single agent, no synthesis performed"
+    assert result.total_cost_usd == 0.01
 
 
 @pytest.mark.asyncio
-async def test_confidence_boosting():
-    """Test consensus confidence boost."""
-    # Two agents agree on same finding
-    agent1 = MockAgent(
-        "agent-1",
-        [
-            Finding(
-                claim="The market is $2.3B",
-                confidence=0.7,
-                evidence=[Evidence(text="evidence1", source="source1")],
-            )
-        ],
-    )
-
-    agent2 = MockAgent(
-        "agent-2",
-        [
-            Finding(
-                claim="The market is $2.3B",  # Exact match
-                confidence=0.75,
-                evidence=[Evidence(text="evidence2", source="source2")],
-            )
-        ],
-    )
-
-    pool = AgentPool([agent1, agent2])
-
-    result = await pool.dispatch_with_consensus(
-        system_prompt="Test",
-        user_prompt="Test",
-        tools=[],
-        consensus_boost=0.15,
-    )
-
-    # Merged finding should have boosted confidence
-    merged_finding = result.findings[0]
-
-    # Base confidence would be ~0.725 (average), boosted by 0.15
-    assert merged_finding.confidence > 0.75
-    assert merged_finding.confidence <= 0.95  # Capped
-
-
-@pytest.mark.asyncio
-async def test_divergent_findings():
-    """Test handling of divergent findings."""
-    # Two agents with completely different findings
+async def test_llm_synthesis_multi_agent():
+    """Test LLM-driven synthesis with multiple agents."""
+    # Create agents with different findings
     agent1 = MockAgent(
         "agent-1",
         [
@@ -190,111 +150,169 @@ async def test_divergent_findings():
         "agent-2",
         [
             Finding(
-                claim="Healthcare spending is $4T",  # Completely different
-                confidence=0.85,
+                claim="Market size is approximately $2.2B",
+                confidence=0.75,
                 evidence=[Evidence(text="evidence2", source="source2")],
             )
         ],
     )
 
-    pool = AgentPool([agent1, agent2])
+    # Primary agent (agent1) will synthesize
+    pool = AgentPool([agent1, agent2], primary_agent_index=0)
 
-    result = await pool.dispatch_with_consensus(
+    # Mock the synthesis output from primary agent
+    synthesized_finding = Finding(
+        claim="Market size is $2.2-2.3B (synthesized from multiple sources)",
+        confidence=0.85,  # Boosted due to consensus
+        evidence=[
+            Evidence(text="evidence1", source="source1"),
+            Evidence(text="evidence2", source="source2"),
+        ],
+        tags=["consensus"],
+    )
+
+    synthesis_output = AgentOutput(
+        findings=[synthesized_finding],
+        self_critique="Synthesis: Both agents reported similar market sizes. "
+        "Consensus finding: market size ~$2.2-2.3B. "
+        "High confidence due to independent confirmation.",
+        raw_text="Synthesis complete",
+        searches_performed=[],
+        cost_usd=0.005,  # Synthesis is cheaper (no search)
+        duration_seconds=0.5,
+        agent_name="agent-1",
+        model="mock-model",
+        total_tokens=50,
+        input_tokens=40,
+        output_tokens=10,
+    )
+
+    # Patch the primary agent's run method to return synthesis
+    with patch.object(agent1, "run", return_value=synthesis_output):
+        result = await pool.dispatch_with_synthesis(
+            system_prompt="Test system",
+            user_prompt="Test user",
+            tools=[],
+        )
+
+    # Verify synthesis result
+    assert isinstance(result, SynthesisResult)
+    assert len(result.findings) == 1
+    assert "synthesized" in result.findings[0].claim.lower()
+    assert result.findings[0].confidence == 0.85
+    assert "consensus" in result.findings[0].tags
+
+    # Verify cost (2 research calls + 1 synthesis)
+    assert result.total_cost_usd == 0.025  # 0.01 + 0.01 + 0.005
+
+    # Verify synthesis reasoning
+    assert "consensus" in result.synthesis_reasoning.lower()
+
+    # Verify consensus findings extracted
+    assert len(result.consensus_findings) > 0
+
+
+@pytest.mark.asyncio
+async def test_primary_agent_index():
+    """Test primary agent selection."""
+    agent1 = MockAgent("agent-1", [])
+    agent2 = MockAgent("agent-2", [])
+    agent3 = MockAgent("agent-3", [])
+
+    # Agent2 is primary
+    pool = AgentPool([agent1, agent2, agent3], primary_agent_index=1)
+
+    assert pool.primary_agent_index == 1
+    assert pool.adapters[pool.primary_agent_index].name == "agent-2"
+
+
+def test_invalid_primary_agent_index():
+    """Test validation of primary agent index."""
+    agent = MockAgent("agent-1", [])
+
+    # Index out of range
+    with pytest.raises(ValueError, match="out of range"):
+        AgentPool([agent], primary_agent_index=5)
+
+    # Negative index
+    with pytest.raises(ValueError, match="out of range"):
+        AgentPool([agent], primary_agent_index=-1)
+
+
+@pytest.mark.asyncio
+async def test_agent_failure_handling():
+    """Test handling of failed agents."""
+
+    class FailingAgent:
+        @property
+        def name(self):
+            return "failing-agent"
+
+        @property
+        def supports_native_search(self):
+            return False
+
+        async def run(self, *args, **kwargs):
+            raise Exception("Agent failed!")
+
+    working_agent = MockAgent("working-agent", [Finding(claim="Test", confidence=0.8, evidence=[])])
+    failing_agent = FailingAgent()
+
+    pool = AgentPool([working_agent, failing_agent])
+
+    outputs = await pool.dispatch(
         system_prompt="Test",
         user_prompt="Test",
         tools=[],
     )
 
-    # Should have 2 separate findings (no consensus)
-    assert result.consensus_count == 0
-    assert result.divergent_count == 2
-    assert len(result.findings) == 2
+    # Should get 2 outputs (1 success, 1 failure placeholder)
+    assert len(outputs) == 2
+
+    # First agent succeeded
+    assert outputs[0].agent_name == "working-agent"
+    assert len(outputs[0].findings) == 1
+
+    # Second agent failed gracefully
+    assert outputs[1].agent_name == "failing-agent"
+    assert len(outputs[1].findings) == 0
+    assert "failed" in outputs[1].self_critique.lower()
 
 
 @pytest.mark.asyncio
-async def test_finding_merge():
-    """Test merging similar findings."""
-    finding1 = Finding(
-        claim="The market is worth $2.3B",
-        confidence=0.7,
-        evidence=[Evidence(text="evidence1", source="source1")],
-        tags=["market", "size"],
-    )
-
-    finding2 = Finding(
-        claim="Market is valued at $2.3B",
-        confidence=0.75,
-        evidence=[Evidence(text="evidence2", source="source2")],
-        tags=["market", "valuation"],
-    )
-
-    # Create pool with dummy agent to test merge method
-    dummy_agent = MockAgent("dummy", [])
-    pool = AgentPool([dummy_agent])
-
-    # Use internal merge method
-    merged = pool._merge_findings([finding1, finding2])
-
-    # Should combine evidence
-    assert len(merged.evidence) == 2
-
-    # Should average confidence (0.7 + 0.75) / 2 = 0.725
-    assert merged.confidence == 0.725
-
-    # Should combine tags
-    assert "market" in merged.tags
-    assert "size" in merged.tags or "valuation" in merged.tags
+async def test_empty_agent_pool():
+    """Test that empty agent pool raises error."""
+    with pytest.raises(ValueError, match="At least one agent adapter required"):
+        AgentPool([])
 
 
 @pytest.mark.asyncio
-async def test_single_agent_no_consensus():
-    """Test single agent (no consensus analysis)."""
-    agent = MockAgent(
+async def test_format_agent_outputs():
+    """Test formatting agent outputs for synthesis."""
+    agent1 = MockAgent(
         "agent-1",
         [
             Finding(
                 claim="Test finding",
                 confidence=0.8,
-                evidence=[Evidence(text="evidence", source="source")],
+                evidence=[Evidence(text="evidence", source="source1")],
             )
         ],
     )
 
-    pool = AgentPool([agent])
+    pool = AgentPool([agent1])
 
-    # With single agent, should skip consensus
-    result = await pool.dispatch_with_consensus(
+    outputs = await pool.dispatch(
         system_prompt="Test",
         user_prompt="Test",
         tools=[],
     )
 
-    assert len(result.findings) == 1
-    assert result.consensus_count == 0
-    assert result.divergent_count == 1
+    formatted = pool._format_agent_outputs(outputs)
 
-
-@pytest.mark.asyncio
-async def test_empty_agent_pool():
-    """Test error handling for empty agent pool."""
-    with pytest.raises(ValueError, match="At least one agent adapter required"):
-        pool = AgentPool([])
-
-
-@pytest.mark.asyncio
-async def test_cost_accumulation():
-    """Test total cost calculation across agents."""
-    agent1 = MockAgent("agent-1", [])
-    agent2 = MockAgent("agent-2", [])
-    agent3 = MockAgent("agent-3", [])
-
-    pool = AgentPool([agent1, agent2, agent3])
-
-    result = await pool.dispatch_with_consensus(
-        system_prompt="Test",
-        user_prompt="Test",
-        tools=[],
-    )
-
-    # Each mock agent costs 0.01
-    assert result.total_cost_usd == 0.03
+    # Should include agent name, model, findings
+    assert "agent-1" in formatted
+    assert "mock-model" in formatted
+    assert "Test finding" in formatted
+    assert "0.8" in formatted.replace("0.80", "0.8")  # Handle formatting
+    assert "source1" in formatted

@@ -1,14 +1,15 @@
 """
-Agent pool for parallel dispatch and consensus analysis.
+Agent pool for parallel dispatch and LLM-driven synthesis.
 
 Supports:
 - Parallel agent dispatch
-- Consensus detection
-- Confidence boosting when agents agree
-- Finding deduplication
+- LLM-driven synthesis (primary agent reviews all outputs)
+- Intelligent consensus detection
+- Evidence quality evaluation
 """
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -19,32 +20,43 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class ConsensusResult:
-    """Result of consensus analysis."""
+class SynthesisResult:
+    """Result of LLM-driven synthesis."""
 
     findings: list[Finding]
-    consensus_count: int
-    divergent_count: int
+    synthesis_reasoning: str
+    consensus_findings: list[str]  # Claims with multi-agent agreement
+    contradictions: list[dict[str, Any]]  # Conflicting findings
     individual_outputs: list[AgentOutput]
     total_cost_usd: float
     total_duration_seconds: float
 
 
 class AgentPool:
-    """Pool of agents for parallel research with consensus analysis."""
+    """Pool of agents for parallel research with LLM-driven synthesis."""
 
-    def __init__(self, adapters: list[AgentAdapter]):
+    def __init__(self, adapters: list[AgentAdapter], primary_agent_index: int = 0):
         """
         Initialize agent pool.
 
         Args:
             adapters: List of agent adapters
+            primary_agent_index: Index of primary agent for synthesis (default: 0)
         """
         if not adapters:
             raise ValueError("At least one agent adapter required")
 
+        if primary_agent_index < 0 or primary_agent_index >= len(adapters):
+            raise ValueError(
+                f"primary_agent_index {primary_agent_index} out of range [0, {len(adapters)-1}]"
+            )
+
         self.adapters = adapters
-        logger.info(f"Initialized pool with {len(adapters)} agents")
+        self.primary_agent_index = primary_agent_index
+        logger.info(
+            f"Initialized pool with {len(adapters)} agents, "
+            f"primary: {adapters[primary_agent_index].name}"
+        )
 
     async def dispatch(
         self,
@@ -103,172 +115,256 @@ class AgentPool:
 
         return results
 
-    async def dispatch_with_consensus(
+    async def dispatch_with_synthesis(
         self,
         system_prompt: str,
         user_prompt: str,
         tools: list[ToolDefinition],
         max_iterations: int = 30,
-        similarity_threshold: float = 0.75,
-        consensus_boost: float = 0.15,
-    ) -> ConsensusResult:
+    ) -> SynthesisResult:
         """
-        Dispatch to agents and analyze consensus.
+        Dispatch to all agents, then use primary agent to synthesize results.
 
-        When multiple agents arrive at similar findings independently,
-        boost the confidence.
+        This is the recommended way to use multiple agents. The workflow:
+        1. All agents research the topic independently in parallel
+        2. Primary agent receives all outputs and synthesizes them
+        3. Primary agent identifies consensus, contradictions, and evaluates evidence
+        4. Returns unified findings with synthesis reasoning
 
         Args:
             system_prompt: System instructions
             user_prompt: User research request
-            tools: Available tools
-            max_iterations: Maximum tool-use iterations
-            similarity_threshold: Minimum similarity for consensus
-            consensus_boost: Confidence boost for consensus findings
+            tools: Available tools (all agents use same tools)
+            max_iterations: Maximum tool-use iterations per agent
 
         Returns:
-            ConsensusResult with merged findings
+            SynthesisResult with synthesized findings
         """
-        # Dispatch to all agents
+        # Step 1: Dispatch to all agents in parallel
+        logger.info("Step 1: Dispatching to all agents for independent research")
         outputs = await self.dispatch(system_prompt, user_prompt, tools, max_iterations)
 
-        # Collect all findings
-        all_findings = []
-        for output in outputs:
-            for finding in output.findings:
-                # Tag with agent name
-                if not finding.tags:
-                    finding.tags = []
-                finding.tags.append(f"agent:{output.agent_name}")
-                all_findings.append(finding)
+        # If only one agent, no synthesis needed
+        if len(self.adapters) == 1:
+            logger.info("Single agent mode, skipping synthesis")
+            return SynthesisResult(
+                findings=outputs[0].findings,
+                synthesis_reasoning="Single agent, no synthesis performed",
+                consensus_findings=[],
+                contradictions=[],
+                individual_outputs=outputs,
+                total_cost_usd=outputs[0].cost_usd,
+                total_duration_seconds=outputs[0].duration_seconds,
+            )
 
-        # Group similar findings
-        finding_groups = self._group_similar_findings(
-            all_findings, similarity_threshold
+        # Step 2: Primary agent synthesizes all outputs
+        logger.info(
+            f"Step 2: Primary agent ({self.adapters[self.primary_agent_index].name}) "
+            "synthesizing results"
+        )
+        synthesis_output = await self._synthesize_with_llm(
+            outputs, system_prompt, user_prompt
         )
 
-        # Merge and boost consensus findings
-        merged_findings = []
-        consensus_count = 0
-        divergent_count = 0
-
-        for group in finding_groups:
-            if len(group) >= 2:
-                # Consensus: multiple agents agree
-                merged = self._merge_findings(group)
-                merged.confidence = min(0.95, merged.confidence + consensus_boost)
-                merged.tags.append("consensus")
-                merged_findings.append(merged)
-                consensus_count += 1
-
-                logger.info(
-                    f"Consensus finding ({len(group)} agents): "
-                    f"{merged.claim[:60]}... (conf={merged.confidence:.2f})"
-                )
-            else:
-                # Divergent: only one agent found this
-                merged_findings.append(group[0])
-                divergent_count += 1
-
         # Calculate totals
-        total_cost = sum(o.cost_usd for o in outputs)
-        total_duration = max(o.duration_seconds for o in outputs)  # Parallel, so max
+        total_cost = sum(o.cost_usd for o in outputs) + synthesis_output.cost_usd
+        total_duration = (
+            max(o.duration_seconds for o in outputs) + synthesis_output.duration_seconds
+        )
 
-        return ConsensusResult(
-            findings=merged_findings,
-            consensus_count=consensus_count,
-            divergent_count=divergent_count,
+        # Parse synthesis output to extract consensus and contradictions
+        consensus_findings, contradictions = self._parse_synthesis_metadata(
+            synthesis_output
+        )
+
+        return SynthesisResult(
+            findings=synthesis_output.findings,
+            synthesis_reasoning=synthesis_output.self_critique,
+            consensus_findings=consensus_findings,
+            contradictions=contradictions,
             individual_outputs=outputs,
             total_cost_usd=total_cost,
             total_duration_seconds=total_duration,
         )
 
-    def _group_similar_findings(
+    async def _synthesize_with_llm(
         self,
-        findings: list[Finding],
-        threshold: float = 0.75,
-    ) -> list[list[Finding]]:
+        outputs: list[AgentOutput],
+        original_system_prompt: str,
+        original_user_prompt: str,
+    ) -> AgentOutput:
         """
-        Group similar findings using claim similarity.
+        Use primary agent to synthesize all agent outputs.
 
         Args:
-            findings: List of findings
-            threshold: Minimum similarity for grouping
+            outputs: All agent outputs from parallel dispatch
+            original_system_prompt: Original research system prompt
+            original_user_prompt: Original research user prompt
 
         Returns:
-            List of finding groups
+            AgentOutput from synthesis
         """
-        from ..graph.operations import calculate_claim_similarity
+        primary_agent = self.adapters[self.primary_agent_index]
 
-        groups = []
-        processed = set()
+        # Format all agent outputs for synthesis
+        formatted_outputs = self._format_agent_outputs(outputs)
 
-        for i, finding1 in enumerate(findings):
-            if i in processed:
-                continue
+        # Synthesis system prompt
+        synthesis_system_prompt = f"""You are the primary research synthesizer.
 
-            group = [finding1]
-            processed.add(i)
+{original_system_prompt}
 
-            for j, finding2 in enumerate(findings[i + 1 :], start=i + 1):
-                if j in processed:
-                    continue
+Your task is to synthesize findings from multiple AI research agents who independently
+researched the same topic. You will receive their outputs and must produce a unified
+set of findings that intelligently combines their work."""
 
-                similarity = calculate_claim_similarity(finding1.claim, finding2.claim)
+        # Synthesis user prompt
+        synthesis_user_prompt = f"""# Original Research Request
 
-                if similarity >= threshold:
-                    group.append(finding2)
-                    processed.add(j)
+{original_user_prompt}
 
-            groups.append(group)
+---
 
-        return groups
+# Agent Outputs
 
-    def _merge_findings(self, findings: list[Finding]) -> Finding:
-        """
-        Merge multiple similar findings into one.
+Multiple AI agents researched this topic independently. Here are their outputs:
 
-        Args:
-            findings: List of similar findings
+{formatted_outputs}
 
-        Returns:
-            Merged finding
-        """
-        if not findings:
-            raise ValueError("Cannot merge empty findings list")
+---
 
-        if len(findings) == 1:
-            return findings[0]
+# Your Synthesis Task
 
-        # Use the longest claim
-        claims = [f.claim for f in findings]
-        merged_claim = max(claims, key=len)
+Analyze all agent outputs and produce synthesized findings. For each finding:
 
-        # Combine all evidence
-        all_evidence = []
-        for f in findings:
-            all_evidence.extend(f.evidence)
+1. **Identify Consensus**: If multiple agents report the same or similar claims,
+   this is strong evidence. Boost confidence accordingly.
 
-        # Average confidence (independent confirmation model would be better)
-        merged_confidence = sum(f.confidence for f in findings) / len(findings)
+2. **Evaluate Contradictions**: If agents disagree, note the contradiction explicitly.
+   Present both sides with evidence and assess which is more credible.
 
-        # Combine tags
-        all_tags = []
-        for f in findings:
-            all_tags.extend(f.tags)
-        merged_tags = list(set(all_tags))  # Deduplicate
+3. **Assess Evidence Quality**: Some agents may have stronger evidence than others.
+   Weight findings by evidence quality, not just count.
 
-        # Combine suggested children
-        all_children = []
-        for f in findings:
-            all_children.extend(f.suggested_children)
-        merged_children = list(set(all_children))
+4. **Avoid Redundancy**: Don't repeat the same finding multiple times. Synthesize
+   similar claims into one finding with combined evidence.
 
-        return Finding(
-            claim=merged_claim,
-            confidence=merged_confidence,
-            evidence=all_evidence,
-            suggested_parent_id=findings[0].suggested_parent_id,
-            suggested_children=merged_children,
-            tags=merged_tags,
+5. **Preserve Unique Insights**: If only one agent found something unique but it has
+   strong evidence, include it.
+
+In your self_critique, explain your synthesis reasoning:
+- Which findings had consensus (list claims)
+- What contradictions you found (describe each)
+- How you weighted evidence quality
+- What unique insights you preserved
+
+Output structured findings using note_finding for each synthesized claim."""
+
+        # Only provide note_finding tool (no search, synthesis only)
+        from .tools.graph_tools import create_note_finding_tool
+
+        synthesis_tools = [create_note_finding_tool()]
+
+        # Run synthesis (limit iterations since no research needed)
+        synthesis_output = await primary_agent.run(
+            system_prompt=synthesis_system_prompt,
+            user_prompt=synthesis_user_prompt,
+            tools=synthesis_tools,
+            max_iterations=10,  # Synthesis shouldn't need many iterations
         )
+
+        logger.info(
+            f"Synthesis complete: {len(synthesis_output.findings)} findings, "
+            f"cost ${synthesis_output.cost_usd:.4f}"
+        )
+
+        return synthesis_output
+
+    def _format_agent_outputs(self, outputs: list[AgentOutput]) -> str:
+        """
+        Format agent outputs for synthesis prompt.
+
+        Args:
+            outputs: List of agent outputs
+
+        Returns:
+            Formatted string for LLM consumption
+        """
+        formatted = []
+
+        for i, output in enumerate(outputs, 1):
+            formatted.append(f"## Agent {i}: {output.agent_name}\n")
+            formatted.append(f"**Model**: {output.model}\n")
+            formatted.append(
+                f"**Searches**: {len(output.searches_performed)} performed\n"
+            )
+            formatted.append(f"**Findings**: {len(output.findings)} reported\n\n")
+
+            if output.findings:
+                formatted.append("### Findings:\n\n")
+                for j, finding in enumerate(output.findings, 1):
+                    formatted.append(f"{j}. **Claim**: {finding.claim}\n")
+                    formatted.append(
+                        f"   - **Confidence**: {finding.confidence:.2f}\n"
+                    )
+                    formatted.append(f"   - **Evidence**: {len(finding.evidence)} sources\n")
+
+                    # Include key evidence snippets
+                    if finding.evidence:
+                        formatted.append("   - **Key Evidence**:\n")
+                        for evidence in finding.evidence[:2]:  # First 2 sources
+                            formatted.append(f"     - {evidence.source}: \"{evidence.text[:150]}...\"\n")
+                    formatted.append("\n")
+            else:
+                formatted.append("*No findings reported*\n\n")
+
+            # Include agent's self-critique
+            if output.self_critique:
+                formatted.append(f"### Agent's Self-Critique:\n{output.self_critique}\n\n")
+
+            formatted.append("---\n\n")
+
+        return "".join(formatted)
+
+    def _parse_synthesis_metadata(
+        self, synthesis_output: AgentOutput
+    ) -> tuple[list[str], list[dict[str, Any]]]:
+        """
+        Parse synthesis metadata from self_critique.
+
+        Extracts consensus findings and contradictions that the primary agent
+        identified during synthesis.
+
+        Args:
+            synthesis_output: Output from synthesis
+
+        Returns:
+            (consensus_findings, contradictions)
+        """
+        consensus_findings = []
+        contradictions = []
+
+        # Try to parse from self_critique
+        critique = synthesis_output.self_critique.lower()
+
+        # Look for consensus markers
+        if "consensus" in critique:
+            # Extract claims with consensus
+            for finding in synthesis_output.findings:
+                if any(tag == "consensus" for tag in (finding.tags or [])):
+                    consensus_findings.append(finding.claim)
+
+        # Look for contradiction markers
+        if "contradict" in critique or "disagree" in critique:
+            # Extract contradictions (this is best-effort parsing)
+            # LLM should tag findings with contradiction details
+            for finding in synthesis_output.findings:
+                if finding.tags and any("contradict" in tag for tag in finding.tags):
+                    contradictions.append(
+                        {
+                            "claim": finding.claim,
+                            "note": "Agents reported contradictory information",
+                        }
+                    )
+
+        return consensus_findings, contradictions

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..agents.pool import AgentPool, ConsensusResult
+    from ..agents.pool import AgentPool, SynthesisResult
     from ..agents.protocol import AgentOutput, ToolDefinition
     from ..graph.models import KnowledgeNode
     from ..graph.store import KnowledgeGraph
@@ -121,10 +121,12 @@ class ResearchCycle:
 
             # Step 3: Dispatch agents
             if use_consensus and len(self.agent_pool.adapters) > 1:
-                # Multi-agent with consensus
-                logger.info(f"Dispatching {len(self.agent_pool.adapters)} agents with consensus")
+                # Multi-agent with LLM synthesis
+                logger.info(
+                    f"Dispatching {len(self.agent_pool.adapters)} agents with LLM synthesis"
+                )
 
-                result: "ConsensusResult" = await self.agent_pool.dispatch_with_consensus(
+                result: "SynthesisResult" = await self.agent_pool.dispatch_with_synthesis(
                     system_prompt,
                     user_prompt,
                     self.tools,
@@ -134,8 +136,8 @@ class ResearchCycle:
                 findings = result.findings
                 agent_outputs = result.individual_outputs
                 total_cost = result.total_cost_usd
-                consensus_count = result.consensus_count
-                divergent_count = result.divergent_count
+                consensus_count = len(result.consensus_findings)
+                divergent_count = len(findings) - consensus_count
 
             else:
                 # Single agent or parallel without consensus

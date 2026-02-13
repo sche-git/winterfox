@@ -91,11 +91,17 @@ async def run(self, system_prompt, user_prompt, tools, max_iterations=30):
     return self._parse_output(messages, response)
 ```
 
-**Consensus Mechanism** (in `pool.py`):
+**LLM Synthesis Mechanism** (in `pool.py`):
 1. Dispatch to all agents in parallel with `asyncio.gather`
-2. Group findings by Jaccard similarity (threshold: 0.75)
-3. If 2+ agents agree, boost confidence by 15%
-4. Merge evidence from all agreeing agents
+2. Primary agent receives all outputs and synthesizes them intelligently
+3. Primary agent identifies consensus, contradictions, and evaluates evidence quality
+4. Returns unified findings with synthesis reasoning
+
+**Why LLM Synthesis over Algorithmic?**
+- Intelligence: LLMs can understand semantic similarity beyond keyword matching
+- Nuance: Can handle contradictions and weighted evidence quality
+- Context: Can explain synthesis reasoning in self_critique
+- Adaptable: Works for any domain without tuning similarity thresholds
 
 **Cost Tracking**: Every AgentOutput tracks:
 - `total_tokens`, `input_tokens`, `output_tokens`
@@ -122,11 +128,16 @@ async def run_cycle(self, focus: str | None = None):
     # 2. Generate prompts
     system_prompt, user_prompt = self._generate_prompts(target)
 
-    # 3. Dispatch to agent pool
-    outputs = await self.agent_pool.dispatch(system_prompt, user_prompt, tools)
+    # 3. Dispatch to agent pool (with LLM synthesis if multi-agent)
+    if len(agents) > 1:
+        result = await self.agent_pool.dispatch_with_synthesis(...)
+        findings = result.findings  # Already synthesized by primary agent
+    else:
+        outputs = await self.agent_pool.dispatch(...)
+        findings = outputs[0].findings
 
     # 4. Merge findings into graph
-    await self._merge_findings(target, outputs)
+    await self._merge_findings(target, findings)
 
     # 5. Propagate confidence
     self.graph.propagate_confidence(target.id)
@@ -135,22 +146,22 @@ async def run_cycle(self, focus: str | None = None):
     await self._record_cycle(target, outputs)
 ```
 
-**Finding Merge Logic** (critical for deduplication):
+**Finding Merge Logic** (graph deduplication):
 ```python
-# Check for duplicates using Jaccard similarity
+# Check for duplicates in existing graph nodes
 similar = self.graph.search_similar(finding.claim, threshold=0.75)
 
 if similar:
-    # Update existing node
+    # Update existing node (independent confirmation)
     existing = similar[0]
     existing.evidence.extend(finding.evidence)
-
-    # Independent confirmation
     existing.confidence = 1 - (1 - existing.confidence) * (1 - finding.confidence * 0.7)
 else:
     # Create new node
     new_node = self.graph.add_node(...)
 ```
+
+**Note**: Synthesis happens at the agent level (multi-agent → single synthesized output). Graph merge handles deduplication across cycles.
 
 ### 4. Multi-Provider Search (`src/winterfox/agents/tools/search/`)
 

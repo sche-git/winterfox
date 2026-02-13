@@ -56,7 +56,7 @@ Success Criteria:
 # Multi-Agent Setup (Quality + Diversity)
 # ============================================================
 
-# Primary Agent: Claude Opus 4.6 (Best for complex analysis)
+# Primary Agent: Claude Opus 4.6 (Best for complex analysis + synthesis)
 [[agents]]
 provider = "anthropic"
 model = "claude-opus-4-20251120"
@@ -65,6 +65,7 @@ timeout = 300
 max_retries = 3
 supports_native_search = true  # Extended thinking with web search
 use_subscription = false
+role = "primary"  # This agent synthesizes results from all agents
 
 # Secondary Agent: Kimi 2.5 (Cost-effective, diverse perspective)
 # Uncomment to enable multi-agent consensus
@@ -73,6 +74,7 @@ use_subscription = false
 # model = "kimi-2.5"
 # api_key_env = "MOONSHOT_API_KEY"
 # timeout = 300
+# role = "secondary"  # This agent provides independent research
 
 # ============================================================
 # Search Configuration (Multi-Provider with Fallback)

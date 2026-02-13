@@ -26,6 +26,9 @@ class AgentConfig(BaseModel):
     max_retries: int = 3
     supports_native_search: bool = False
     use_subscription: bool = False  # For Claude: use subscription auth
+    role: Literal["primary", "secondary"] = (
+        "secondary"  # Primary agent synthesizes multi-agent results
+    )
 
 
 class SearchProviderConfig(BaseModel):
@@ -105,10 +108,36 @@ class ResearchConfig(BaseModel):
     @field_validator("agents")
     @classmethod
     def validate_at_least_one_agent(cls, v: list[AgentConfig]) -> list[AgentConfig]:
-        """Ensure at least one agent is configured."""
+        """Ensure at least one agent is configured and primary agent is set properly."""
         if len(v) == 0:
             raise ValueError("At least one agent must be configured")
+
+        # If multiple agents, ensure primary is explicitly set
+        if len(v) > 1:
+            primary_count = sum(1 for agent in v if agent.role == "primary")
+
+            if primary_count == 0:
+                # Auto-promote first agent to primary
+                v[0].role = "primary"
+            elif primary_count > 1:
+                raise ValueError(
+                    "Only one agent can be marked as 'primary' for synthesis. "
+                    f"Found {primary_count} primary agents."
+                )
+
         return v
+
+    def get_primary_agent_index(self) -> int:
+        """
+        Get index of primary agent (for multi-agent synthesis).
+
+        Returns:
+            Index of primary agent (0 if single agent or first primary in list)
+        """
+        for i, agent in enumerate(self.agents):
+            if agent.role == "primary":
+                return i
+        return 0  # Default to first agent if none marked primary
 
     def get_north_star(self, base_path: Path | None = None) -> str:
         """

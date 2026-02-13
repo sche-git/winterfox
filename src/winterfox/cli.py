@@ -213,7 +213,9 @@ async def _run_cycles(
 
         adapters.append(adapter)
 
-    agent_pool = AgentPool(adapters)
+    # Get primary agent index from config
+    primary_agent_index = config.get_primary_agent_index()
+    agent_pool = AgentPool(adapters, primary_agent_index=primary_agent_index)
 
     # Initialize search providers
     from .agents.tools.search import configure_search
