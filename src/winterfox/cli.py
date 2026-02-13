@@ -79,14 +79,14 @@ def init(
         # Create default config
         create_default_config(config_path, project_name, north_star)
 
+        # Create .winterfox/ directory structure
+        (path / ".winterfox" / "raw").mkdir(parents=True, exist_ok=True)
+
         # Initialize database
         from .graph.store import KnowledgeGraph
 
         db_path = path / ".winterfox" / "graph.db"
         asyncio.run(_init_database(db_path))
-
-        # Create directories
-        (path / ".winterfox" / "raw").mkdir(parents=True, exist_ok=True)
 
         # Success message
         console.print(Panel.fit(
