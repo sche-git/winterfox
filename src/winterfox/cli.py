@@ -3,11 +3,15 @@ Winterfox CLI - Command-line interface for autonomous research.
 
 Commands:
 - init: Initialize a new research project
-- cycle: Run research cycle(s)
+- run: Run research cycle(s)
 - status: Show graph summary
 - show: Display specific node
 - export: Export knowledge graph
+- view-cycle: View detailed cycle output
+- list-cycles: List and filter past cycles
+- export-cycles: Export multiple cycles to report
 - interactive: Run in interactive mode
+- serve: Launch web dashboard
 """
 
 import asyncio
@@ -1098,6 +1102,271 @@ async def _interactive_mode(config_path: Path) -> None:
             await _export_graph(config_path, output_path, "markdown", True)
             console.print(f"[green]✓[/green] Exported to {output_path}")
         # else continue (default)
+
+
+@app.command()
+def view_cycle(
+    cycle_id: int = typer.Argument(..., help="Cycle ID to view"),
+    config: Path = typer.Option(Path("winterfox.toml"), "--config", "-c"),
+    format: str = typer.Option("markdown", "--format", "-f", help="Format: markdown or summary"),
+    save: Optional[Path] = typer.Option(None, "--save", "-s", help="Save to file instead of printing"),
+) -> None:
+    """
+    View detailed output from a specific cycle.
+
+    Examples:
+        winterfox view-cycle 15
+        winterfox view-cycle 15 --save cycle_015.md
+        winterfox view-cycle 15 --format summary
+    """
+    setup_logging()
+
+    try:
+        asyncio.run(_view_cycle_output(config, cycle_id, format, save))
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+
+async def _view_cycle_output(
+    config_path: Path,
+    cycle_id: int,
+    format: str,
+    save_path: Path | None,
+) -> None:
+    """Load and display cycle output."""
+    from .export.cycle_export import CycleExportService
+    from .graph.store import KnowledgeGraph
+
+    # Load config and graph
+    config = load_config(config_path)
+    graph = KnowledgeGraph(str(config.storage.db_path), workspace_id=config.multi_tenancy.workspace_id)
+    await graph.initialize()
+
+    try:
+        if format == "markdown":
+            # Generate markdown
+            service = CycleExportService(graph)
+            markdown = await service.export_cycle_markdown(cycle_id)
+
+            if save_path:
+                save_path.write_text(markdown, encoding="utf-8")
+                console.print(f"[green]✓[/green] Saved to {save_path}")
+            else:
+                console.print(markdown)
+
+        elif format == "summary":
+            # Show summary table
+            cycle = await graph.get_cycle_output(cycle_id)
+            if not cycle:
+                console.print(f"[red]Cycle {cycle_id} not found[/red]")
+                return
+
+            # Create summary table
+            table = Table(title=f"Cycle {cycle_id} Summary")
+            table.add_column("Field", style="cyan")
+            table.add_column("Value", style="white")
+
+            table.add_row("Target", cycle["target_claim"][:80] + ("..." if len(cycle["target_claim"]) > 80 else ""))
+            table.add_row("Status", "✅ Success" if cycle["success"] else "❌ Failed")
+            table.add_row("Created", f"{cycle['findings_created']} nodes")
+            table.add_row("Updated", f"{cycle['findings_updated']} nodes")
+            table.add_row("Agents", str(cycle["agent_count"]))
+            table.add_row("Cost", f"${cycle['total_cost_usd']:.4f}")
+            table.add_row("Duration", f"{cycle['duration_seconds']:.1f}s")
+            table.add_row("Tokens", f"{cycle['total_tokens']:,}")
+
+            console.print(table)
+
+    finally:
+        await graph.close()
+
+
+@app.command()
+def list_cycles(
+    config: Path = typer.Option(Path("winterfox.toml"), "--config", "-c"),
+    limit: int = typer.Option(20, "--limit", "-n", help="Number of cycles to show"),
+    node: Optional[str] = typer.Option(None, "--node", help="Filter by target node ID"),
+    min_cost: Optional[float] = typer.Option(None, "--min-cost", help="Minimum cost filter"),
+    max_cost: Optional[float] = typer.Option(None, "--max-cost", help="Maximum cost filter"),
+    search: Optional[str] = typer.Option(None, "--search", "-s", help="Search synthesis text"),
+    success_only: bool = typer.Option(False, "--success-only", help="Show only successful cycles"),
+) -> None:
+    """
+    List past research cycles with filtering.
+
+    Examples:
+        winterfox list-cycles
+        winterfox list-cycles --limit 10
+        winterfox list-cycles --node abc123
+        winterfox list-cycles --min-cost 0.10 --max-cost 1.00
+        winterfox list-cycles --search "legal tech"
+    """
+    setup_logging()
+
+    try:
+        asyncio.run(_list_cycle_outputs(config, limit, node, min_cost, max_cost, search, success_only))
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+
+async def _list_cycle_outputs(
+    config_path: Path,
+    limit: int,
+    node_id: str | None,
+    min_cost: float | None,
+    max_cost: float | None,
+    search_query: str | None,
+    success_only: bool,
+) -> None:
+    """List and filter cycle outputs."""
+    from .graph.store import KnowledgeGraph
+
+    # Load config and graph
+    config = load_config(config_path)
+    graph = KnowledgeGraph(str(config.storage.db_path), workspace_id=config.multi_tenancy.workspace_id)
+    await graph.initialize()
+
+    try:
+        # Search or list
+        if search_query:
+            cycles = await graph.search_cycle_outputs(
+                query=search_query,
+                workspace_id=config.multi_tenancy.workspace_id,
+                limit=limit,
+            )
+        else:
+            cycles = await graph.list_cycle_outputs(
+                workspace_id=config.multi_tenancy.workspace_id,
+                limit=limit,
+                offset=0,
+                min_cost=min_cost,
+                max_cost=max_cost,
+                target_node_id=node_id,
+                success_only=success_only,
+            )
+
+        if not cycles:
+            console.print("[yellow]No cycles found[/yellow]")
+            return
+
+        # Display table
+        table = Table(title=f"Research Cycles ({len(cycles)} results)")
+        table.add_column("ID", style="cyan", width=6)
+        table.add_column("Date", style="white", width=19)
+        table.add_column("Claim", style="white", width=50)
+        table.add_column("Status", style="white", width=8)
+        table.add_column("Findings", style="green", width=10)
+        table.add_column("Cost", style="yellow", width=8)
+        table.add_column("Duration", style="blue", width=8)
+
+        for cycle in cycles:
+            status = "✅" if cycle["success"] else "❌"
+            claim_preview = cycle["target_claim"][:47] + "..." if len(cycle["target_claim"]) > 50 else cycle["target_claim"]
+            findings = f"+{cycle['findings_created']} ~{cycle['findings_updated']}"
+
+            table.add_row(
+                str(cycle["cycle_id"]),
+                cycle["created_at"][:19],  # Trim microseconds
+                claim_preview,
+                status,
+                findings,
+                f"${cycle['total_cost_usd']:.3f}",
+                f"{cycle['duration_seconds']:.0f}s",
+            )
+
+        console.print(table)
+        console.print(f"\n[dim]Use 'winterfox view-cycle <id>' to see details[/dim]")
+
+    finally:
+        await graph.close()
+
+
+@app.command()
+def export_cycles(
+    output: Path = typer.Argument(..., help="Output file path"),
+    config: Path = typer.Option(Path("winterfox.toml"), "--config", "-c"),
+    cycles: Optional[str] = typer.Option(None, "--cycles", help="Cycle range (e.g., '1-10' or '5,7,9')"),
+    node: Optional[str] = typer.Option(None, "--node", help="Export cycles for specific node"),
+    title: str = typer.Option("Research Cycles Report", "--title", "-t"),
+    format: str = typer.Option("markdown", "--format", "-f", help="Format: markdown"),
+) -> None:
+    """
+    Export multiple cycles to a combined report.
+
+    Examples:
+        winterfox export-cycles report.md --cycles "1-10"
+        winterfox export-cycles report.md --cycles "5,7,9,12"
+        winterfox export-cycles report.md --node abc123
+    """
+    setup_logging()
+
+    try:
+        asyncio.run(_export_cycles_combined(config, output, cycles, node, title, format))
+        console.print(f"[green]✓[/green] Exported to {output}")
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+
+async def _export_cycles_combined(
+    config_path: Path,
+    output: Path,
+    cycles: str | None,
+    node_id: str | None,
+    title: str,
+    format: str,
+) -> None:
+    """Export multiple cycles to single file."""
+    from .export.cycle_export import export_cycles_to_markdown
+    from .graph.store import KnowledgeGraph
+
+    # Load config and graph
+    config = load_config(config_path)
+    graph = KnowledgeGraph(str(config.storage.db_path), workspace_id=config.multi_tenancy.workspace_id)
+    await graph.initialize()
+
+    try:
+        # Parse cycle IDs
+        cycle_ids = []
+
+        if cycles:
+            # Parse range or list
+            if "-" in cycles:
+                # Range: "1-10"
+                start, end = cycles.split("-")
+                cycle_ids = list(range(int(start), int(end) + 1))
+            else:
+                # List: "5,7,9"
+                cycle_ids = [int(c.strip()) for c in cycles.split(",")]
+
+        elif node_id:
+            # Get all cycles for node
+            all_cycles = await graph.list_cycle_outputs(
+                workspace_id=config.multi_tenancy.workspace_id,
+                limit=1000,
+                target_node_id=node_id,
+            )
+            cycle_ids = [c["cycle_id"] for c in all_cycles]
+
+        else:
+            # Export all recent cycles (default: last 20)
+            all_cycles = await graph.list_cycle_outputs(
+                workspace_id=config.multi_tenancy.workspace_id,
+                limit=20,
+            )
+            cycle_ids = [c["cycle_id"] for c in all_cycles]
+
+        if not cycle_ids:
+            console.print("[yellow]No cycles to export[/yellow]")
+            return
+
+        # Export to markdown
+        await export_cycles_to_markdown(graph, cycle_ids, str(output), title)
+
+    finally:
+        await graph.close()
 
 
 @app.command()

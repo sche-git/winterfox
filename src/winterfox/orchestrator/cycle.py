@@ -237,6 +237,7 @@ class ResearchCycle:
                 total_cost = result.total_cost_usd
                 consensus_count = len(result.consensus_findings)
                 divergent_count = len(findings) - consensus_count
+                synthesis_result = result  # Store for later use
 
                 # Emit synthesis completed
                 await self._emit_event({
@@ -292,6 +293,7 @@ class ResearchCycle:
                 total_cost = sum(o.cost_usd for o in outputs)
                 consensus_count = 0
                 divergent_count = len(findings)
+                synthesis_result = None  # No synthesis for single agent
 
             logger.info(
                 f"[Cycle {self.cycle_id}] Agents complete: {len(findings)} findings, "
@@ -369,6 +371,14 @@ class ResearchCycle:
                 }
             })
 
+            # Save cycle output to database
+            await self._save_cycle_output(
+                result=result,
+                synthesis_result=synthesis_result,
+                merge_stats=merge_stats,
+                target=target,
+            )
+
             return result
 
         except Exception as e:
@@ -400,3 +410,39 @@ class ResearchCycle:
                 success=False,
                 error_message=str(e),
             )
+
+    async def _save_cycle_output(
+        self,
+        result: CycleResult,
+        synthesis_result: "SynthesisResult | None",
+        merge_stats: dict,
+        target: KnowledgeNode,
+    ) -> None:
+        """
+        Save cycle output to database.
+
+        Args:
+            result: CycleResult with all outputs
+            synthesis_result: SynthesisResult if multi-agent mode
+            merge_stats: Merge statistics from graph integration
+            target: Target node that was researched
+        """
+        try:
+            # Save to database
+            cycle_output_id = await self.graph.save_cycle_output(
+                cycle_id=self.cycle_id,
+                target_node=target,
+                agent_outputs=result.agent_outputs,
+                synthesis_result=synthesis_result,
+                merge_stats=merge_stats,
+                duration_seconds=result.duration_seconds,
+                total_cost_usd=result.total_cost_usd,
+                success=result.success,
+                error_message=result.error_message,
+            )
+
+            logger.info(f"Saved cycle {self.cycle_id} output to database (id={cycle_output_id})")
+
+        except Exception as e:
+            logger.error(f"Failed to save cycle output: {e}", exc_info=True)
+            # Don't fail the cycle if output saving fails
