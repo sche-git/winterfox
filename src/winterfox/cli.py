@@ -820,19 +820,35 @@ async def _run_cycles(
             # Show cycle result
             if result.success:
                 console.print(
-                    f"[green]✓[/green] Cycle {result.cycle_id}: "
+                    f"\n[green]✓[/green] Cycle {result.cycle_id}: "
                     f"{result.findings_created} created, {result.findings_updated} updated | "
                     f"${result.total_cost_usd:.4f} | {result.duration_seconds:.1f}s"
                 )
+
+                # Show findings from each agent
+                for output in result.agent_outputs:
+                    if output.findings:
+                        console.print(f"\n  [bold cyan]{output.agent_name}[/bold cyan] ({len(output.findings)} findings):")
+                        for finding in output.findings:
+                            conf_color = "green" if finding.confidence >= 0.7 else "yellow" if finding.confidence >= 0.4 else "red"
+                            console.print(f"    [{conf_color}]{finding.confidence:.0%}[/] {finding.claim}")
+                            for ev in finding.evidence[:2]:
+                                console.print(f"        [dim]- {ev.source}[/dim]")
             else:
                 console.print(
-                    f"[red]✗[/red] Cycle {result.cycle_id} failed: {result.error_message}"
+                    f"\n[red]✗[/red] Cycle {result.cycle_id} failed: {result.error_message}"
                 )
 
             progress.advance(task)
 
-    # Show summary
+    # Show graph state
     console.print(f"\n{orchestrator.get_summary()}")
+
+    from .graph.views import render_summary_view
+
+    console.print("[bold]Knowledge Graph:[/bold]\n")
+    summary = await render_summary_view(graph, max_depth=3)
+    console.print(summary)
 
     await graph.close()
 
