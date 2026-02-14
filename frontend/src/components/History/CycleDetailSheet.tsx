@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import MarkdownContent from '@/components/ui/MarkdownContent';
+import AgentRawOutput from '@/components/ui/AgentRawOutput';
 import { getStrategyConfig, getFindingTypeConfig } from '@/lib/nodeTypes';
 import type { AgentOutputSummary } from '../../types/api';
 import {
@@ -105,7 +106,7 @@ const CycleDetailSheet: React.FC<CycleDetailSheetProps> = ({ cycleId, onClose })
                       Strategy
                     </p>
                     <div className="mt-1.5 flex items-start gap-2">
-                      <Badge variant="outline" className={`text-[11px] shrink-0 ${stratConfig?.bg ?? ''}`}>
+                      <Badge variant="outline" className="text-[11px] shrink-0">
                         {stratConfig?.label ?? detail.selection_strategy}
                       </Badge>
                       {detail.selection_reasoning && (
@@ -133,27 +134,27 @@ const CycleDetailSheet: React.FC<CycleDetailSheetProps> = ({ cycleId, onClose })
               {/* Stats grid */}
               <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <div className="text-xl font-semibold tabular-nums">{detail.findings_created}</div>
+                  <div className="text-xl font-semibold tabular-nums">{detail.directions_created}</div>
                   <div className="text-xs text-muted-foreground">Created</div>
                 </div>
                 <div>
-                  <div className="text-xl font-semibold tabular-nums">{detail.findings_updated}</div>
+                  <div className="text-xl font-semibold tabular-nums">{detail.directions_updated}</div>
                   <div className="text-xs text-muted-foreground">Updated</div>
                 </div>
                 <div>
-                  <div className="text-xl font-semibold tabular-nums">{detail.findings_skipped}</div>
+                  <div className="text-xl font-semibold tabular-nums">{detail.directions_skipped}</div>
                   <div className="text-xs text-muted-foreground">Skipped</div>
                 </div>
               </div>
 
               {/* Consensus findings */}
-              {detail.consensus_findings.length > 0 && (
+              {detail.consensus_directions.length > 0 && (
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    Consensus ({detail.consensus_findings.length})
+                    Consensus ({detail.consensus_directions.length})
                   </p>
                   <div className="mt-2 space-y-2">
-                    {detail.consensus_findings.map((claim, i) => (
+                    {detail.consensus_directions.map((claim, i) => (
                       <div key={i} className="rounded border p-2.5">
                         <p className="text-sm leading-relaxed">{claim}</p>
                       </div>
@@ -264,7 +265,7 @@ const CycleDetailSheet: React.FC<CycleDetailSheetProps> = ({ cycleId, onClose })
                     </div>
                     {agent.raw_text ? (
                       <div className="max-h-[600px] overflow-auto p-4">
-                        <MarkdownContent content={agent.raw_text} />
+                        <AgentRawOutput rawText={agent.raw_text} />
                       </div>
                     ) : (
                       <p className="p-4 text-xs text-muted-foreground">
@@ -310,7 +311,7 @@ function AgentSection({ agent }: { agent: AgentOutputSummary }) {
         </div>
         <div className="flex items-center gap-3">
           <span className="text-xs tabular-nums text-muted-foreground">
-            {agent.findings_count} findings, {agent.searches_performed} searches
+            {agent.findings_count} directions, {agent.searches_performed} searches
           </span>
           <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`} />
         </div>
@@ -336,11 +337,11 @@ function AgentSection({ agent }: { agent: AgentOutputSummary }) {
             </div>
           )}
 
-          {/* Findings */}
+          {/* Extracted directions */}
           {agent.findings.length > 0 && (
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Findings ({agent.findings.length})
+                Directions ({agent.findings.length})
               </p>
               <div className="mt-1.5 space-y-2">
                 {agent.findings.map((f, i) => {
@@ -350,7 +351,7 @@ function AgentSection({ agent }: { agent: AgentOutputSummary }) {
                       <div className="flex items-start gap-2">
                         <p className="flex-1 text-sm leading-relaxed">{f.claim}</p>
                         {ftConfig && (
-                          <Badge variant="outline" className={`text-[10px] py-0 shrink-0 ${ftConfig.bg}`}>
+                          <Badge variant="outline" className="text-[10px] py-0 shrink-0">
                             {ftConfig.label}
                           </Badge>
                         )}

@@ -81,7 +81,7 @@ const CycleTable: React.FC<CycleTableProps> = ({ selectedCycleId, onSelectCycle 
 
           {/* Stats row */}
           <div className="flex items-center gap-2 pl-[18px] text-[11px] tabular-nums text-muted-foreground">
-            <span>{cycle.findings_count} findings</span>
+            <span>{cycle.directions_count} directions</span>
             <span>{formatDuration(cycle.duration_seconds)}</span>
           </div>
         </button>

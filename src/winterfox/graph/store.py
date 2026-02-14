@@ -157,12 +157,13 @@ SCHEMA_STATEMENTS = [
 
     # Cycle outputs table (for storing raw agent outputs and synthesis)
     """
-    CREATE TABLE IF NOT EXISTS cycle_outputs (
+CREATE TABLE IF NOT EXISTS cycle_outputs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         cycle_id INTEGER NOT NULL,
         workspace_id TEXT NOT NULL DEFAULT 'default',
         target_node_id TEXT NOT NULL,
         target_claim TEXT NOT NULL,
+        research_context TEXT,
         synthesis_reasoning TEXT,
         consensus_findings TEXT,
         contradictions TEXT,
@@ -383,6 +384,7 @@ class KnowledgeGraph:
             migrations = [
                 "ALTER TABLE cycle_outputs ADD COLUMN selection_strategy TEXT",
                 "ALTER TABLE cycle_outputs ADD COLUMN selection_reasoning TEXT",
+                "ALTER TABLE cycle_outputs ADD COLUMN research_context TEXT",
                 "ALTER TABLE agent_outputs ADD COLUMN raw_text TEXT NOT NULL DEFAULT ''",
             ]
             for migration in migrations:
@@ -766,6 +768,7 @@ class KnowledgeGraph:
         error_message: str | None = None,
         selection_strategy: str | None = None,
         selection_reasoning: str | None = None,
+        research_context: str | None = None,
     ) -> int:
         """
         Save complete cycle output to database.
@@ -784,6 +787,7 @@ class KnowledgeGraph:
             error_message: Optional error message
             selection_strategy: LLM selection strategy (if used)
             selection_reasoning: LLM selection reasoning
+            research_context: Snapshot of context/prompts used for research dispatch
 
         Returns:
             cycle_output_id (int)
@@ -820,19 +824,21 @@ class KnowledgeGraph:
                 """
                 INSERT INTO cycle_outputs (
                     cycle_id, workspace_id, target_node_id, target_claim,
+                    research_context,
                     synthesis_reasoning, consensus_findings, contradictions,
                     findings_created, findings_updated, findings_skipped,
                     agent_count, total_tokens, total_cost_usd,
                     lead_llm_cost_usd, research_agents_cost_usd,
                     duration_seconds,
                     success, error_message, selection_strategy, selection_reasoning
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     cycle_id,
                     self.workspace_id,
                     target_node.id,
                     target_node.claim,
+                    research_context,
                     synthesis_reasoning,
                     consensus_findings_json,
                     contradictions_json,
@@ -966,9 +972,11 @@ class KnowledgeGraph:
                 """
                 SELECT
                     id, cycle_id, workspace_id, target_node_id, target_claim,
-                    synthesis_reasoning, consensus_findings, contradictions,
+                    research_context, synthesis_reasoning, consensus_findings, contradictions,
                     findings_created, findings_updated, findings_skipped,
-                    agent_count, total_tokens, total_cost_usd, duration_seconds,
+                    agent_count, total_tokens, total_cost_usd,
+                    lead_llm_cost_usd, research_agents_cost_usd,
+                    duration_seconds,
                     success, error_message, created_at,
                     selection_strategy, selection_reasoning
                 FROM cycle_outputs
@@ -990,21 +998,24 @@ class KnowledgeGraph:
                 "workspace_id": row[2],
                 "target_node_id": row[3],
                 "target_claim": row[4],
-                "synthesis_reasoning": row[5],
-                "consensus_findings": json.loads(row[6]) if row[6] else [],
-                "contradictions": json.loads(row[7]) if row[7] else [],
-                "findings_created": row[8],
-                "findings_updated": row[9],
-                "findings_skipped": row[10],
-                "agent_count": row[11],
-                "total_tokens": row[12],
-                "total_cost_usd": row[13],
-                "duration_seconds": row[14],
-                "success": bool(row[15]),
-                "error_message": row[16],
-                "created_at": row[17],
-                "selection_strategy": row[18],
-                "selection_reasoning": row[19],
+                "research_context": row[5],
+                "synthesis_reasoning": row[6],
+                "consensus_findings": json.loads(row[7]) if row[7] else [],
+                "contradictions": json.loads(row[8]) if row[8] else [],
+                "findings_created": row[9],
+                "findings_updated": row[10],
+                "findings_skipped": row[11],
+                "agent_count": row[12],
+                "total_tokens": row[13],
+                "total_cost_usd": row[14],
+                "lead_llm_cost_usd": row[15],
+                "research_agents_cost_usd": row[16],
+                "duration_seconds": row[17],
+                "success": bool(row[18]),
+                "error_message": row[19],
+                "created_at": row[20],
+                "selection_strategy": row[21],
+                "selection_reasoning": row[22],
             }
 
             # Get agent outputs
@@ -1117,7 +1128,9 @@ class KnowledgeGraph:
                 SELECT
                     cycle_id, workspace_id, target_node_id, target_claim,
                     findings_created, findings_updated, findings_skipped,
-                    agent_count, total_tokens, total_cost_usd, duration_seconds,
+                    agent_count, total_tokens, total_cost_usd,
+                    lead_llm_cost_usd, research_agents_cost_usd,
+                    duration_seconds,
                     success, error_message, created_at
                 FROM cycle_outputs
                 WHERE {where_clause}
@@ -1141,10 +1154,12 @@ class KnowledgeGraph:
                 "agent_count": row[7],
                 "total_tokens": row[8],
                 "total_cost_usd": row[9],
-                "duration_seconds": row[10],
-                "success": bool(row[11]),
-                "error_message": row[12],
-                "created_at": row[13],
+                "lead_llm_cost_usd": row[10],
+                "research_agents_cost_usd": row[11],
+                "duration_seconds": row[12],
+                "success": bool(row[13]),
+                "error_message": row[14],
+                "created_at": row[15],
             })
 
         return results
@@ -1175,7 +1190,9 @@ class KnowledgeGraph:
                 SELECT
                     co.cycle_id, co.workspace_id, co.target_node_id, co.target_claim,
                     co.findings_created, co.findings_updated, co.findings_skipped,
-                    co.agent_count, co.total_tokens, co.total_cost_usd, co.duration_seconds,
+                    co.agent_count, co.total_tokens, co.total_cost_usd,
+                    co.lead_llm_cost_usd, co.research_agents_cost_usd,
+                    co.duration_seconds,
                     co.success, co.error_message, co.created_at
                 FROM cycle_outputs co
                 JOIN cycle_outputs_fts fts ON co.rowid = fts.rowid
@@ -1200,10 +1217,12 @@ class KnowledgeGraph:
                 "agent_count": row[7],
                 "total_tokens": row[8],
                 "total_cost_usd": row[9],
-                "duration_seconds": row[10],
-                "success": bool(row[11]),
-                "error_message": row[12],
-                "created_at": row[13],
+                "lead_llm_cost_usd": row[10],
+                "research_agents_cost_usd": row[11],
+                "duration_seconds": row[12],
+                "success": bool(row[13]),
+                "error_message": row[14],
+                "created_at": row[15],
             })
 
         return results

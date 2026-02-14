@@ -353,6 +353,8 @@ class GraphService:
 
             status: str = "completed" if row["success"] else "failed"
             findings_count = row.get("findings_created", 0) + row.get("findings_updated", 0)
+            lead_llm_cost = row.get("lead_llm_cost_usd", 0.0)
+            research_agents_cost = row.get("research_agents_cost_usd", 0.0)
 
             cycles.append(
                 CycleResponse(
@@ -363,7 +365,10 @@ class GraphService:
                     focus_node_id=row.get("target_node_id"),
                     target_claim=row.get("target_claim", ""),
                     total_cost_usd=row.get("total_cost_usd", 0.0),
+                    lead_llm_cost_usd=lead_llm_cost,
+                    research_agents_cost_usd=research_agents_cost,
                     findings_count=findings_count,
+                    directions_count=findings_count,
                     agents_used=[],
                     duration_seconds=row.get("duration_seconds"),
                 )
@@ -469,15 +474,22 @@ class GraphService:
             id=data["cycle_id"],
             target_node_id=data.get("target_node_id", ""),
             target_claim=data.get("target_claim", ""),
+            research_context=data.get("research_context"),
             findings_created=data.get("findings_created", 0),
             findings_updated=data.get("findings_updated", 0),
             findings_skipped=data.get("findings_skipped", 0),
+            directions_created=data.get("findings_created", 0),
+            directions_updated=data.get("findings_updated", 0),
+            directions_skipped=data.get("findings_skipped", 0),
             consensus_findings=consensus_list,
+            consensus_directions=consensus_list,
             contradictions=contradictions,
             synthesis_reasoning=data.get("synthesis_reasoning", "") or "",
             selection_strategy=data.get("selection_strategy"),
             selection_reasoning=data.get("selection_reasoning"),
             total_cost_usd=data.get("total_cost_usd", 0.0),
+            lead_llm_cost_usd=data.get("lead_llm_cost_usd", 0.0),
+            research_agents_cost_usd=data.get("research_agents_cost_usd", 0.0),
             total_tokens=data.get("total_tokens", 0),
             duration_seconds=data.get("duration_seconds", 0.0),
             agent_count=data.get("agent_count", 0),
@@ -506,15 +518,26 @@ class GraphService:
                 counts[node.node_type] = counts.get(node.node_type, 0) + 1
         return counts
 
-    async def get_cycle_stats(self) -> tuple[int, int, int, float, float, dict[str, float]]:
+    async def get_cycle_stats(
+        self,
+    ) -> tuple[int, int, int, float, float, float, float, dict[str, float]]:
         """
         Get aggregate cycle statistics.
 
         Returns:
-            Tuple of (total, successful, failed, avg_duration, total_cost, cost_by_agent)
+            Tuple of (
+                total,
+                successful,
+                failed,
+                avg_duration,
+                total_cost,
+                total_lead_cost,
+                total_research_cost,
+                cost_by_agent,
+            )
         """
         if not Path(self.db_path).exists():
-            return 0, 0, 0, 0.0, 0.0, {}
+            return 0, 0, 0, 0.0, 0.0, 0.0, 0.0, {}
 
         graph = await self._get_graph()
 
@@ -527,7 +550,9 @@ class GraphService:
                     SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful,
                     SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failed,
                     AVG(duration_seconds) as avg_duration,
-                    SUM(total_cost_usd) as total_cost
+                    SUM(total_cost_usd) as total_cost,
+                    SUM(lead_llm_cost_usd) as total_lead_cost,
+                    SUM(research_agents_cost_usd) as total_research_cost
                 FROM cycle_outputs
                 WHERE workspace_id = ?
                 """,
@@ -539,6 +564,8 @@ class GraphService:
             failed = row[2] or 0
             avg_duration = row[3] or 0.0
             total_cost = row[4] or 0.0
+            total_lead_cost = row[5] or 0.0
+            total_research_cost = row[6] or 0.0
 
             # Cost by agent
             cursor = await db.execute(
@@ -555,7 +582,16 @@ class GraphService:
             for agent_row in await cursor.fetchall():
                 cost_by_agent[agent_row[0]] = agent_row[1] or 0.0
 
-        return total, successful, failed, avg_duration, total_cost, cost_by_agent
+        return (
+            total,
+            successful,
+            failed,
+            avg_duration,
+            total_cost,
+            total_lead_cost,
+            total_research_cost,
+            cost_by_agent,
+        )
 
     async def _count_cycle_outputs(self, graph: KnowledgeGraph) -> int:
         """Count total cycle outputs for pagination."""

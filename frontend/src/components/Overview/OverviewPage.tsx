@@ -1,5 +1,5 @@
 /**
- * Overview page - Enhanced stats + recent activity + top findings + type breakdown.
+ * Overview page - direction-first metrics and recent cycle activity.
  */
 
 import React, { useEffect, useState } from 'react';
@@ -8,7 +8,6 @@ import { useCycleStore } from '../../stores/cycleStore';
 import { useUIStore } from '../../stores/uiStore';
 import { api } from '../../services/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { NODE_TYPE_CONFIG } from '@/lib/nodeTypes';
 import {
   CheckCircle2,
   XCircle,
@@ -45,32 +44,26 @@ const OverviewPage: React.FC = () => {
     return date.toLocaleDateString();
   };
 
-  // Type breakdown data
-  const hypothesisCount = stats?.graph.hypothesis_count ?? 0;
-  const supportingCount = stats?.graph.supporting_count ?? 0;
-  const opposingCount = stats?.graph.opposing_count ?? 0;
-  const typedTotal = hypothesisCount + supportingCount + opposingCount;
-  const hasTypeBreakdown = typedTotal > 0;
+  const directionCount = stats?.graph.direction_count ?? summary?.total_nodes ?? 0;
 
   return (
     <div className="p-8">
       <div className="mb-8">
         <h2 className="text-2xl font-bold tracking-tight">Overview</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Research progress and key metrics
+          Direction progress and research momentum
         </p>
       </div>
 
-      {/* Stats Grid */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center gap-2">
               <GitFork className="h-4 w-4 text-muted-foreground" />
-              <span className="text-xs text-muted-foreground">Total Nodes</span>
+              <span className="text-xs text-muted-foreground">Directions</span>
             </div>
             <div className="mt-2 text-2xl font-semibold tabular-nums">
-              {summary?.total_nodes ?? 0}
+              {directionCount}
             </div>
           </CardContent>
         </Card>
@@ -109,59 +102,29 @@ const OverviewPage: React.FC = () => {
         </Card>
       </div>
 
-      {/* Knowledge Breakdown */}
-      {hasTypeBreakdown && (
-        <Card className="mt-8">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base font-semibold">Knowledge Breakdown</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-6">
-              {([
-                ['hypothesis', hypothesisCount],
-                ['supporting', supportingCount],
-                ['opposing', opposingCount],
-              ] as const).map(([type, count]) => {
-                const cfg = NODE_TYPE_CONFIG[type];
-                return (
-                  <div key={type} className="flex items-center gap-2">
-                    <cfg.icon className={`h-4 w-4 ${cfg.color}`} />
-                    <span className="text-lg font-semibold tabular-nums">{count}</span>
-                    <span className="text-xs text-muted-foreground">{cfg.label}</span>
-                  </div>
-                );
-              })}
+      <Card className="mt-8">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base font-semibold">Direction Health</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <div className="text-xs text-muted-foreground">Root Directions</div>
+              <div className="mt-1 text-lg font-semibold tabular-nums">{summary?.root_nodes ?? 0}</div>
             </div>
-            {/* Stacked bar */}
-            <div className="mt-3 flex h-2.5 overflow-hidden rounded-full bg-border">
-              {hypothesisCount > 0 && (
-                <div
-                  className="h-full bg-amber-400 transition-all"
-                  style={{ width: `${(hypothesisCount / typedTotal) * 100}%` }}
-                  title={`${hypothesisCount} hypotheses`}
-                />
-              )}
-              {supportingCount > 0 && (
-                <div
-                  className="h-full bg-emerald-400 transition-all"
-                  style={{ width: `${(supportingCount / typedTotal) * 100}%` }}
-                  title={`${supportingCount} supporting`}
-                />
-              )}
-              {opposingCount > 0 && (
-                <div
-                  className="h-full bg-rose-400 transition-all"
-                  style={{ width: `${(opposingCount / typedTotal) * 100}%` }}
-                  title={`${opposingCount} opposing`}
-                />
-              )}
+            <div>
+              <div className="text-xs text-muted-foreground">Low Confidence</div>
+              <div className="mt-1 text-lg font-semibold tabular-nums">{summary?.low_confidence_count ?? 0}</div>
             </div>
-          </CardContent>
-        </Card>
-      )}
+            <div>
+              <div className="text-xs text-muted-foreground">Last Cycle</div>
+              <div className="mt-1 text-sm font-medium">{summary?.last_cycle_at ? formatTimeAgo(summary.last_cycle_at) : '-'}</div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="mt-8 grid gap-8 lg:grid-cols-2">
-        {/* Recent Cycles */}
         <Card>
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
@@ -170,7 +133,7 @@ const OverviewPage: React.FC = () => {
                 onClick={() => setCurrentPage('history')}
                 className="text-xs text-muted-foreground hover:text-foreground"
               >
-                View all
+                View storyline
               </button>
             </div>
           </CardHeader>
@@ -201,7 +164,7 @@ const OverviewPage: React.FC = () => {
                       </span>
                     </div>
                     <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                      <span>{cycle.findings_count} findings</span>
+                      <span>{cycle.directions_count} directions</span>
                       <span className="tabular-nums">${cycle.total_cost_usd.toFixed(3)}</span>
                     </div>
                   </button>
@@ -211,11 +174,10 @@ const OverviewPage: React.FC = () => {
           </CardContent>
         </Card>
 
-        {/* Top Findings */}
         <Card>
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-base font-semibold">Top Findings</CardTitle>
+              <CardTitle className="text-base font-semibold">Top Directions</CardTitle>
               <button
                 onClick={() => setCurrentPage('graph')}
                 className="text-xs text-muted-foreground hover:text-foreground"
@@ -226,64 +188,58 @@ const OverviewPage: React.FC = () => {
           </CardHeader>
           <CardContent>
             {topNodes.length === 0 ? (
-              <p className="py-4 text-center text-sm text-muted-foreground">
-                No findings yet
-              </p>
+              <p className="py-4 text-center text-sm text-muted-foreground">No directions yet</p>
             ) : (
               <div className="divide-y">
-                {topNodes.map((node) => {
-                  const nodeTypeCfg = node.node_type ? NODE_TYPE_CONFIG[node.node_type as keyof typeof NODE_TYPE_CONFIG] : null;
-                  return (
-                    <button
-                      key={node.id}
-                      onClick={() => {
-                        selectNode(node.id);
-                        setCurrentPage('graph');
-                      }}
-                      className="flex w-full items-start gap-3 py-2.5 text-left transition-colors hover:bg-muted/50 -mx-2 px-2 rounded"
-                    >
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm leading-snug line-clamp-2">{node.claim}</p>
-                        <div className="mt-1 flex items-center gap-2">
-                          {nodeTypeCfg && (
-                            <span className={`flex items-center gap-1 text-xs ${nodeTypeCfg.color}`}>
-                              <nodeTypeCfg.icon className="h-3 w-3" />
-                              {nodeTypeCfg.label}
-                            </span>
-                          )}
-                          <span className="text-xs tabular-nums text-muted-foreground">
-                            {(node.confidence * 100).toFixed(0)}% confidence
-                          </span>
-                          {node.evidence.length > 0 && (
-                            <span className="text-xs text-muted-foreground">
-                              {node.evidence.length} evidence
-                            </span>
-                          )}
-                        </div>
+                {topNodes.map((node) => (
+                  <button
+                    key={node.id}
+                    onClick={() => {
+                      selectNode(node.id);
+                      setCurrentPage('graph');
+                    }}
+                    className="flex w-full items-start gap-3 py-2.5 text-left transition-colors hover:bg-muted/50 -mx-2 px-2 rounded"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm leading-snug line-clamp-2">{node.claim}</p>
+                      <div className="mt-1 flex items-center gap-2">
+                        <span className="text-xs tabular-nums text-muted-foreground">
+                          {(node.confidence * 100).toFixed(0)}% confidence
+                        </span>
+                        {node.evidence.length > 0 && (
+                          <span className="text-xs text-muted-foreground">{node.evidence.length} evidence</span>
+                        )}
                       </div>
-                    </button>
-                  );
-                })}
+                    </div>
+                  </button>
+                ))}
               </div>
             )}
           </CardContent>
         </Card>
       </div>
 
-      {/* Cost Breakdown */}
       {stats && Object.keys(stats.cost.by_agent).length > 0 && (
         <Card className="mt-8">
           <CardHeader className="pb-3">
-            <CardTitle className="text-base font-semibold">Cost by Agent</CardTitle>
+            <CardTitle className="text-base font-semibold">Cost Breakdown</CardTitle>
           </CardHeader>
           <CardContent>
+            <div className="mb-4 grid grid-cols-2 gap-4">
+              <div>
+                <div className="text-xs text-muted-foreground">Lead LLM</div>
+                <div className="mt-1 text-lg font-semibold tabular-nums">${stats.cost.lead_llm_usd.toFixed(3)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">Research Agents</div>
+                <div className="mt-1 text-lg font-semibold tabular-nums">${stats.cost.research_agents_usd.toFixed(3)}</div>
+              </div>
+            </div>
             <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
               {Object.entries(stats.cost.by_agent).map(([agent, cost]) => (
                 <div key={agent}>
                   <div className="text-xs text-muted-foreground truncate">{agent}</div>
-                  <div className="mt-1 text-lg font-semibold tabular-nums">
-                    ${cost.toFixed(3)}
-                  </div>
+                  <div className="mt-1 text-lg font-semibold tabular-nums">${cost.toFixed(3)}</div>
                 </div>
               ))}
             </div>

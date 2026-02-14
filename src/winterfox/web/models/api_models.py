@@ -105,7 +105,10 @@ class CycleResponse(BaseModel):
     focus_node_id: str | None = None
     target_claim: str = ""
     total_cost_usd: float = Field(ge=0.0)
+    lead_llm_cost_usd: float = Field(ge=0.0, default=0.0)
+    research_agents_cost_usd: float = Field(ge=0.0, default=0.0)
     findings_count: int = Field(ge=0)
+    directions_count: int = Field(ge=0, default=0)
     agents_used: list[str] = Field(default_factory=list)
     duration_seconds: float | None = None
 
@@ -176,15 +179,22 @@ class CycleDetailResponse(BaseModel):
     id: int
     target_node_id: str = ""
     target_claim: str = ""
+    research_context: str | None = None
     findings_created: int = Field(ge=0)
     findings_updated: int = Field(ge=0)
     findings_skipped: int = Field(ge=0, default=0)
+    directions_created: int = Field(ge=0, default=0)
+    directions_updated: int = Field(ge=0, default=0)
+    directions_skipped: int = Field(ge=0, default=0)
     consensus_findings: list[str] = Field(default_factory=list)
+    consensus_directions: list[str] = Field(default_factory=list)
     contradictions: list[ContradictionItem] = Field(default_factory=list)
     synthesis_reasoning: str = ""
     selection_strategy: str | None = None
     selection_reasoning: str | None = None
     total_cost_usd: float = Field(ge=0.0, default=0.0)
+    lead_llm_cost_usd: float = Field(ge=0.0, default=0.0)
+    research_agents_cost_usd: float = Field(ge=0.0, default=0.0)
     total_tokens: int = Field(ge=0, default=0)
     duration_seconds: float = Field(ge=0.0, default=0.0)
     agent_count: int = Field(ge=0, default=0)
@@ -226,6 +236,7 @@ class GraphStats(BaseModel):
     """Graph-level statistics."""
 
     total_nodes: int = Field(ge=0)
+    direction_count: int = Field(ge=0, default=0)
     avg_confidence: float = Field(ge=0.0, le=1.0)
     avg_importance: float = Field(ge=0.0, le=1.0)
     hypothesis_count: int = Field(ge=0, default=0)
@@ -246,6 +257,8 @@ class CostStats(BaseModel):
     """Cost statistics."""
 
     total_usd: float = Field(ge=0.0)
+    lead_llm_usd: float = Field(ge=0.0, default=0.0)
+    research_agents_usd: float = Field(ge=0.0, default=0.0)
     by_agent: dict[str, float] = Field(default_factory=dict)
 
 
@@ -288,7 +301,14 @@ class AgentConfigResponse(BaseModel):
 
     provider: str
     model: str
-    role: Literal["primary", "secondary"] = "secondary"
+    supports_native_search: bool = False
+
+
+class LeadAgentConfigResponse(BaseModel):
+    """Lead LLM configuration (without API keys)."""
+
+    provider: str
+    model: str
     supports_native_search: bool = False
 
 
@@ -306,6 +326,7 @@ class ConfigResponse(BaseModel):
     project_name: str
     north_star: str
     workspace_id: str
+    lead_agent: LeadAgentConfigResponse
     agents: list[AgentConfigResponse]
     search_providers: list[SearchProviderResponse]
 

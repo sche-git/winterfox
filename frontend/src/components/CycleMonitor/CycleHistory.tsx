@@ -79,7 +79,7 @@ const CycleHistory: React.FC = () => {
                 </span>
               </div>
               <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
-                <span>{cycle.findings_count} findings</span>
+                <span>{cycle.directions_count} directions</span>
                 <span className="flex items-center gap-1">
                   <Clock className="h-3 w-3" />
                   {formatDuration(cycle.duration_seconds)}

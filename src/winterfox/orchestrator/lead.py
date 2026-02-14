@@ -49,6 +49,16 @@ class DirectionSynthesis:
     contradictions: list[str]  # Where agents disagreed
 
 
+@dataclass
+class ResearchDispatchResult:
+    """Result of dispatching research agents plus prompt context snapshot."""
+
+    outputs: list[AgentOutput]
+    focused_view: str
+    system_prompt: str
+    user_prompt: str
+
+
 class LeadLLM:
     """
     Orchestrates research cycles with maximum autonomy.
@@ -259,7 +269,7 @@ Respond with ONLY the JSON structure specified (no markdown, no explanation outs
         research_agents: list[AgentAdapter],
         tools: list,
         max_searches: int,
-    ) -> list[AgentOutput]:
+    ) -> ResearchDispatchResult:
         """
         Lead LLM dispatches research agents in parallel.
 
@@ -273,7 +283,7 @@ Respond with ONLY the JSON structure specified (no markdown, no explanation outs
             max_searches: Maximum searches per agent
 
         Returns:
-            List of raw agent outputs
+            ResearchDispatchResult containing agent outputs and prompt context
         """
         from ..graph.views import render_focused_view
 
@@ -350,7 +360,12 @@ Begin your research. Remember: your raw output will be analyzed by the Lead LLM 
             raise ValueError("All research agents failed")
 
         logger.info(f"Research complete: {len(results)} agents returned outputs")
-        return results
+        return ResearchDispatchResult(
+            outputs=results,
+            focused_view=focused_view,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
 
     async def synthesize_directions(
         self,

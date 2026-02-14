@@ -77,12 +77,36 @@ class WinterfoxAPI {
     const response = await this.client.get<CyclesListResponse>('/api/cycles', {
       params: { limit, offset },
     });
-    return response.data;
+    return {
+      ...response.data,
+      cycles: response.data.cycles.map((cycle) => ({
+        ...cycle,
+        lead_llm_cost_usd: cycle.lead_llm_cost_usd ?? 0,
+        research_agents_cost_usd:
+          (cycle.research_agents_cost_usd ?? 0) > 0
+            ? (cycle.research_agents_cost_usd ?? 0)
+            : Math.max(0, (cycle.total_cost_usd ?? 0) - (cycle.lead_llm_cost_usd ?? 0)),
+        directions_count: cycle.directions_count ?? cycle.findings_count ?? 0,
+      })),
+    };
   }
 
   async getCycle(cycleId: number): Promise<CycleDetail> {
     const response = await this.client.get<CycleDetail>(`/api/cycles/${cycleId}`);
-    return response.data;
+    const detail = response.data;
+    return {
+      ...detail,
+      research_context: detail.research_context ?? null,
+      directions_created: detail.directions_created ?? detail.findings_created ?? 0,
+      directions_updated: detail.directions_updated ?? detail.findings_updated ?? 0,
+      directions_skipped: detail.directions_skipped ?? detail.findings_skipped ?? 0,
+      consensus_directions: detail.consensus_directions ?? detail.consensus_findings ?? [],
+      lead_llm_cost_usd: detail.lead_llm_cost_usd ?? 0,
+      research_agents_cost_usd:
+        (detail.research_agents_cost_usd ?? 0) > 0
+          ? (detail.research_agents_cost_usd ?? 0)
+          : Math.max(0, (detail.total_cost_usd ?? 0) - (detail.lead_llm_cost_usd ?? 0)),
+    };
   }
 
   async getActiveCycle(): Promise<ActiveCycle> {
@@ -94,7 +118,19 @@ class WinterfoxAPI {
 
   async getOverviewStats(): Promise<OverviewStats> {
     const response = await this.client.get<OverviewStats>('/api/stats/overview');
-    return response.data;
+    const stats = response.data;
+    return {
+      ...stats,
+      graph: {
+        ...stats.graph,
+        direction_count: stats.graph.direction_count ?? stats.graph.total_nodes ?? 0,
+      },
+      cost: {
+        ...stats.cost,
+        lead_llm_usd: stats.cost.lead_llm_usd ?? 0,
+        research_agents_usd: stats.cost.research_agents_usd ?? 0,
+      },
+    };
   }
 
   async getTimeline(period: string = 'day', limit: number = 30): Promise<TimelineResponse> {
@@ -108,7 +144,19 @@ class WinterfoxAPI {
 
   async getConfig(): Promise<Config> {
     const response = await this.client.get<Config>('/api/config');
-    return response.data;
+    const cfg = response.data;
+    return {
+      ...cfg,
+      lead_agent: cfg.lead_agent ?? (cfg.agents[0] ? {
+        provider: cfg.agents[0].provider,
+        model: cfg.agents[0].model,
+        supports_native_search: cfg.agents[0].supports_native_search,
+      } : {
+        provider: '',
+        model: '',
+        supports_native_search: false,
+      }),
+    };
   }
 
   // Report endpoints

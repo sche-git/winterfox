@@ -202,7 +202,9 @@ class OpenRouterAdapter:
         self.timeout = timeout
         self._supports_native_search = supports_native_search
         self.base_url = "https://openrouter.ai/api/v1"
-        self._pricing = {"prompt": 0.0, "completion": 0.0}
+        # Fallback estimate (per 1M tokens) when OpenRouter response does not
+        # include explicit cost fields.
+        self._pricing = {"prompt": 1.0, "completion": 3.0}
 
     @property
     def name(self) -> str:
@@ -261,6 +263,7 @@ class OpenRouterAdapter:
         total_tokens = 0
         input_tokens = 0
         output_tokens = 0
+        reported_cost_usd = 0.0
 
         tools_schema = [self._convert_tool_to_openai_schema(t) for t in tools]
         tool_map = {t.name: t for t in tools}
@@ -303,6 +306,9 @@ class OpenRouterAdapter:
                 input_tokens += prompt_tokens
                 output_tokens += completion_tokens
                 total_tokens += prompt_tokens + completion_tokens
+
+                # OpenRouter often provides precise cost in usage metadata.
+                reported_cost_usd += self._extract_usage_cost_usd(usage)
 
                 # Get assistant message
                 message = result["choices"][0]["message"]
@@ -357,21 +363,27 @@ class OpenRouterAdapter:
                 messages.extend(tool_results)
 
         duration = (datetime.now() - start_time).total_seconds()
-        cost_usd = self._calculate_cost(input_tokens, output_tokens)
+        cost_usd = (
+            reported_cost_usd
+            if reported_cost_usd > 0
+            else self._calculate_cost(input_tokens, output_tokens)
+        )
 
-        final_message = messages[-1] if messages else {}
-        self_critique = ""
-        if isinstance(final_message.get("content"), str):
-            self_critique = final_message["content"]
+        assistant_messages = [
+            m.get("content", "")
+            for m in messages
+            if m.get("role") == "assistant" and isinstance(m.get("content"), str)
+        ]
+        cleaned_raw_text = "\n\n".join(
+            content.strip() for content in assistant_messages if content.strip()
+        )
+
+        self_critique = assistant_messages[-1] if assistant_messages else ""
         if not self_critique:
             self_critique = "No critique provided"
 
         return AgentOutput(
-            raw_text="\n".join(
-                m.get("content", "")
-                for m in messages
-                if isinstance(m.get("content"), str)
-            ),
+            raw_text=cleaned_raw_text,
             self_critique=self_critique,
             searches_performed=searches_performed,
             cost_usd=cost_usd,
@@ -398,6 +410,26 @@ class OpenRouterAdapter:
         input_cost = (input_tokens / 1_000_000) * self._pricing["prompt"]
         output_cost = (output_tokens / 1_000_000) * self._pricing["completion"]
         return input_cost + output_cost
+
+    def _extract_usage_cost_usd(self, usage: dict[str, Any]) -> float:
+        """
+        Extract explicit cost from OpenRouter usage metadata.
+
+        Some responses include fields like `cost`, `total_cost`,
+        `prompt_cost`, `completion_cost`.
+        """
+        def as_float(value: Any) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return 0.0
+
+        direct = as_float(usage.get("cost")) + as_float(usage.get("total_cost"))
+        if direct > 0:
+            return direct
+
+        split = as_float(usage.get("prompt_cost")) + as_float(usage.get("completion_cost"))
+        return split if split > 0 else 0.0
 
 
 async def fetch_openrouter_models(api_key: str | None = None) -> list[dict[str, Any]]:

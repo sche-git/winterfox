@@ -46,7 +46,7 @@ const EventFeed: React.FC = () => {
       case 'agent.started':
         return `Agent ${event.data.agent_name} started`;
       case 'agent.completed':
-        return `Agent ${event.data.agent_name} completed: ${event.data.findings_count} findings ($${event.data.cost_usd.toFixed(4)})`;
+        return `Agent ${event.data.agent_name} completed: ${event.data.findings_count} directions ($${event.data.cost_usd.toFixed(4)})`;
       case 'node.created':
         return `Node created: "${event.data.claim.substring(0, 50)}..." (${(event.data.confidence * 100).toFixed(0)}% confidence)`;
       case 'node.updated':

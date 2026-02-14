@@ -14,6 +14,7 @@ from ...config import ResearchConfig, load_config
 from ..models.api_models import (
     AgentConfigResponse,
     ConfigResponse,
+    LeadAgentConfigResponse,
     SearchProviderResponse,
 )
 
@@ -63,7 +64,6 @@ async def get_config() -> ConfigResponse:
             AgentConfigResponse(
                 provider=agent.provider,
                 model=agent.model,
-                role=agent.role,
                 supports_native_search=agent.supports_native_search,
             )
             for agent in _config.agents
@@ -83,6 +83,11 @@ async def get_config() -> ConfigResponse:
             project_name=_config.project.name,
             north_star=north_star,
             workspace_id=_config.multi_tenancy.workspace_id,
+            lead_agent=LeadAgentConfigResponse(
+                provider=_config.lead_agent.provider,
+                model=_config.lead_agent.model,
+                supports_native_search=_config.lead_agent.supports_native_search,
+            ),
             agents=agents,
             search_providers=search_providers,
         )

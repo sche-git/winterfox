@@ -21,7 +21,7 @@ export interface Node {
   children_ids: string[];
   evidence: Evidence[];
   status: 'active' | 'archived' | 'merged';
-  node_type: 'question' | 'hypothesis' | 'supporting' | 'opposing' | null;
+  node_type: 'direction' | 'question' | 'hypothesis' | 'supporting' | 'opposing' | null;
   created_by_cycle: number;
   updated_by_cycle: number;
   created_at: string;
@@ -50,7 +50,7 @@ export interface NodeTreeItem {
   claim: string;
   confidence: number;
   importance: number;
-  node_type: 'question' | 'hypothesis' | 'supporting' | 'opposing' | null;
+  node_type: 'direction' | 'question' | 'hypothesis' | 'supporting' | 'opposing' | null;
   children: NodeTreeItem[];
 }
 
@@ -79,6 +79,9 @@ export interface Cycle {
   focus_node_id: string | null;
   target_claim: string;
   total_cost_usd: number;
+  lead_llm_cost_usd: number;
+  research_agents_cost_usd: number;
+  directions_count: number;
   findings_count: number;
   agents_used: string[];
   duration_seconds: number | null;
@@ -136,6 +139,11 @@ export interface CycleDetail {
   id: number;
   target_node_id: string;
   target_claim: string;
+  research_context: string | null;
+  directions_created: number;
+  directions_updated: number;
+  directions_skipped: number;
+  consensus_directions: string[];
   findings_created: number;
   findings_updated: number;
   findings_skipped: number;
@@ -145,6 +153,8 @@ export interface CycleDetail {
   selection_strategy: 'EXPLORE' | 'DEEPEN' | 'CHALLENGE' | null;
   selection_reasoning: string | null;
   total_cost_usd: number;
+  lead_llm_cost_usd: number;
+  research_agents_cost_usd: number;
   total_tokens: number;
   duration_seconds: number;
   agent_count: number;
@@ -166,6 +176,7 @@ export interface ActiveCycle {
 
 export interface GraphStats {
   total_nodes: number;
+  direction_count: number;
   avg_confidence: number;
   avg_importance: number;
   hypothesis_count: number;
@@ -182,6 +193,8 @@ export interface CycleStats {
 
 export interface CostStats {
   total_usd: number;
+  lead_llm_usd: number;
+  research_agents_usd: number;
   by_agent: Record<string, number>;
 }
 
@@ -213,7 +226,12 @@ export interface TimelineResponse {
 export interface AgentConfig {
   provider: string;
   model: string;
-  role: 'primary' | 'secondary';
+  supports_native_search: boolean;
+}
+
+export interface LeadAgentConfig {
+  provider: string;
+  model: string;
   supports_native_search: boolean;
 }
 
@@ -227,6 +245,7 @@ export interface Config {
   project_name: string;
   north_star: string;
   workspace_id: string;
+  lead_agent: LeadAgentConfig;
   agents: AgentConfig[];
   search_providers: SearchProvider[];
 }
@@ -275,6 +294,8 @@ export interface CycleCompletedEvent extends BaseEvent {
   type: 'cycle.completed';
   data: {
     cycle_id: number;
+    directions_created?: number;
+    directions_updated?: number;
     findings_created: number;
     findings_updated: number;
     total_cost_usd: number;

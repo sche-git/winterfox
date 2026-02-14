@@ -269,6 +269,8 @@ tool for simple factual lookups or when you need structured results.
             # Parse findings from final text
             # Extract search records
             searches = self._extract_searches(tool_calls_log)
+            duration = time.time() - start_time
+            cost = self._calculate_cost(total_input_tokens, total_output_tokens)
 
             return AgentOutput(
                 raw_text=final_text,
@@ -333,5 +335,4 @@ tool for simple factual lookups or when you need structured results.
                 )
 
         return searches
-
 

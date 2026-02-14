@@ -49,6 +49,7 @@ class CycleResult:
     agent_outputs: list["AgentOutput"]
     synthesis_reasoning: str | None
     selection_reasoning: str | None
+    research_context: str | None
     success: bool
     error_message: str | None = None
 
@@ -205,22 +206,22 @@ class ResearchCycle:
                 f"[Cycle {self.cycle_id}] Dispatching {len(self.research_agents)} research agent(s)"
             )
 
-            agent_outputs = await self.lead_llm.dispatch_research(
+            dispatch_result = await self.lead_llm.dispatch_research(
                 target_node=target,
                 research_agents=self.research_agents,
                 tools=self.tools,
                 max_searches=max_searches,
             )
+            agent_outputs = dispatch_result.outputs
 
             # Calculate costs
             lead_llm_cost = sum(
                 output.cost_usd for output in agent_outputs
                 if output.agent_name == self.lead_llm.adapter.name
             )
-            research_cost = sum(
-                output.cost_usd for output in agent_outputs
-                if output.agent_name != self.lead_llm.adapter.name
-            )
+            # Research outputs here are already from dispatched research agents only.
+            # Do not filter by adapter name; lead and research may intentionally share a model.
+            research_cost = sum(output.cost_usd for output in agent_outputs)
 
             logger.info(
                 f"[Cycle {self.cycle_id}] Research complete: "
@@ -300,6 +301,14 @@ class ResearchCycle:
             total_cost = lead_llm_cost + research_cost
 
             # Build result
+            context_snapshot = (
+                "## Focused View\n\n"
+                f"{dispatch_result.focused_view}\n\n"
+                "## Research System Prompt\n\n"
+                f"{dispatch_result.system_prompt}\n\n"
+                "## Research User Prompt\n\n"
+                f"{dispatch_result.user_prompt}"
+            )
             result = CycleResult(
                 cycle_id=self.cycle_id,
                 target_node_id=target.id,
@@ -315,6 +324,7 @@ class ResearchCycle:
                 agent_outputs=agent_outputs,
                 synthesis_reasoning=synthesis.synthesis_reasoning,
                 selection_reasoning=selection_reasoning,
+                research_context=context_snapshot,
                 success=True,
             )
 
@@ -378,6 +388,7 @@ class ResearchCycle:
                 agent_outputs=[],
                 synthesis_reasoning=None,
                 selection_reasoning=None,
+                research_context=None,
                 success=False,
                 error_message=str(e),
             )
@@ -446,6 +457,7 @@ class ResearchCycle:
                 error_message=result.error_message,
                 selection_strategy=None,  # Lead LLM makes strategic decisions
                 selection_reasoning=result.selection_reasoning,
+                research_context=result.research_context,
             )
 
             logger.info(f"Saved cycle {self.cycle_id} output to database (id={cycle_output_id})")

@@ -50,6 +50,7 @@ async def get_overview_stats(
         # Build response
         graph_stats = GraphStats(
             total_nodes=summary.total_nodes,
+            direction_count=type_counts.get("direction", summary.total_nodes),
             avg_confidence=summary.avg_confidence,
             avg_importance=summary.avg_importance,
             hypothesis_count=type_counts.get("hypothesis", 0),
@@ -58,7 +59,16 @@ async def get_overview_stats(
         )
 
         # Get cycle statistics from database
-        total, successful, failed, avg_duration, total_cost, cost_by_agent = (
+        (
+            total,
+            successful,
+            failed,
+            avg_duration,
+            total_cost,
+            total_lead_cost,
+            total_research_cost,
+            cost_by_agent,
+        ) = (
             await service.get_cycle_stats()
         )
 
@@ -71,6 +81,8 @@ async def get_overview_stats(
 
         cost_stats = CostStats(
             total_usd=total_cost,
+            lead_llm_usd=total_lead_cost,
+            research_agents_usd=total_research_cost,
             by_agent=cost_by_agent,
         )
 

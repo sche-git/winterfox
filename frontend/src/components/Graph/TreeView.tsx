@@ -82,14 +82,12 @@ const TreeView: React.FC = () => {
             className="w-full rounded-md border bg-background py-2 pl-8 pr-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
           />
         </div>
-        {/* Type legend */}
+        {/* Direction legend */}
         <div className="flex flex-wrap gap-x-3 gap-y-1">
-          {Object.entries(NODE_TYPE_CONFIG).map(([key, cfg]) => (
-            <div key={key} className="flex items-center gap-1">
-              <cfg.icon className={`h-3 w-3 ${cfg.color}`} />
-              <span className="text-[10px] text-muted-foreground">{cfg.label}</span>
-            </div>
-          ))}
+          <div className="flex items-center gap-1">
+            <NODE_TYPE_CONFIG.direction.icon className={`h-3 w-3 ${NODE_TYPE_CONFIG.direction.color}`} />
+            <span className="text-[10px] text-muted-foreground">{NODE_TYPE_CONFIG.direction.label}</span>
+          </div>
         </div>
       </div>
 

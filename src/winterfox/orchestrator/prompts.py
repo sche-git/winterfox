@@ -186,57 +186,6 @@ Document findings directly in your response with clear evidence."""
     return system_prompt, user_prompt
 
 
-async def generate_initial_research_prompt(
-    north_star: str,
-    initial_question: str,
-    max_searches: int = 25,
-) -> tuple[str, str]:
-    """
-    Generate prompts for initial research (when graph is empty).
-
-    Args:
-        north_star: Project mission
-        initial_question: Starting research question
-        max_searches: Maximum searches allowed
-
-    Returns:
-        (system_prompt, user_prompt) tuple
-    """
-    system_prompt = f"""You are an expert research agent starting a new research project:
-
-{north_star}
-
-Your goal is to build a knowledge graph by conducting systematic research. Start by
-exploring the initial question, then identify key sub-topics for deeper investigation.
-
-## Guidelines
-
-1. **Breadth First**: Identify major topic areas before going deep
-2. **Structure**: Organize findings hierarchically (main topics → sub-topics → details)
-3. **Evidence**: Always cite credible sources
-4. **Actionable**: Each finding should suggest follow-up research areas
-
-You have {max_searches} web searches available. Use them to get a comprehensive overview."""
-
-    user_prompt = f"""## Initial Research Question
-
-{initial_question}
-
-## Your Task
-
-1. Research this question comprehensively
-2. Identify 5-10 major sub-topics that need investigation
-3. For each finding, note:
-   - The main claim
-   - Supporting evidence
-   - Suggested areas for deeper research
-4. Prioritize findings by importance (0.0-1.0) in your response
-
-Begin your research using web_search and web_fetch. Provide a structured written analysis."""
-
-    return system_prompt, user_prompt
-
-
 def generate_critique_prompt(findings_summary: str) -> str:
     """
     Generate prompt for self-critique of research results.

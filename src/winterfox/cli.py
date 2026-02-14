@@ -677,6 +677,17 @@ async def _init_database(db_path: Path) -> None:
     await graph.close()
 
 
+def _derive_initial_direction_claim(north_star: str) -> str:
+    """Derive an initial seed direction from North Star text."""
+    lines = [line.strip() for line in north_star.splitlines() if line.strip()]
+    seed = lines[0] if lines else north_star.strip()
+    if not seed:
+        return "Explore the project's highest-value direction."
+    if len(seed) > 220:
+        seed = seed[:220].rstrip() + "..."
+    return f"Start with this mission direction: {seed}"
+
+
 @app.command()
 def run(
     n: int = typer.Option(1, "--count", "-n", help="Number of cycles to run"),
@@ -744,10 +755,11 @@ async def _run_cycles(
     # Check if graph is empty
     nodes = await graph.get_all_active_nodes()
     if not nodes:
-        console.print("[yellow]Graph is empty. Creating initial research question...[/yellow]\n")
-
+        console.print(
+            "[yellow]Graph is empty. Bootstrapping initial direction from North Star...[/yellow]\n"
+        )
         north_star = config.get_north_star(config_path.parent)
-        initial_claim = typer.prompt("What is your initial research question?")
+        initial_claim = _derive_initial_direction_claim(north_star)
 
         await graph.add_node(
             claim=initial_claim,

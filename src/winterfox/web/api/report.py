@@ -44,49 +44,41 @@ def _get_config_and_path() -> tuple:
     return _config, _config_path
 
 
-def _create_primary_adapter(config):
-    """Create the primary agent adapter (same pattern as cli.py)."""
+def _create_lead_adapter(config):
+    """Create the Lead agent adapter (same pattern as cli.py)."""
     from ...agents.adapters.anthropic import AnthropicAdapter
     from ...agents.adapters.kimi import KimiAdapter
     from ...agents.adapters.openrouter import OpenRouterAdapter
 
-    # Find primary agent config
-    primary_config = None
-    for agent_config in config.agents:
-        if agent_config.role == "primary":
-            primary_config = agent_config
-            break
-    if primary_config is None:
-        primary_config = config.agents[0]
-
     api_keys = config.get_agent_api_keys()
-    key = f"{primary_config.provider}:{primary_config.model}"
+    lead_config = config.lead_agent
+    key = f"{lead_config.provider}:{lead_config.model}"
     api_key = api_keys.get(key, "")
 
-    if primary_config.provider == "anthropic":
+    if lead_config.provider == "anthropic":
         return AnthropicAdapter(
-            model=primary_config.model,
-            api_key=api_key if not primary_config.use_subscription else None,
-            use_subscription=primary_config.use_subscription,
-            timeout=primary_config.timeout_seconds,
+            model=lead_config.model,
+            api_key=api_key if not lead_config.use_subscription else None,
+            use_subscription=lead_config.use_subscription,
+            timeout=lead_config.timeout_seconds,
         )
-    elif primary_config.provider == "moonshot":
+    elif lead_config.provider == "moonshot":
         return KimiAdapter(
-            model=primary_config.model,
+            model=lead_config.model,
             api_key=api_key,
-            timeout=primary_config.timeout_seconds,
+            timeout=lead_config.timeout_seconds,
         )
-    elif primary_config.provider == "openrouter":
+    elif lead_config.provider == "openrouter":
         return OpenRouterAdapter(
-            model=primary_config.model,
+            model=lead_config.model,
             api_key=api_key,
-            timeout=primary_config.timeout_seconds,
-            supports_native_search=primary_config.supports_native_search,
+            timeout=lead_config.timeout_seconds,
+            supports_native_search=lead_config.supports_native_search,
         )
     else:
         raise HTTPException(
             status_code=500,
-            detail=f"Unsupported provider: {primary_config.provider}",
+            detail=f"Unsupported provider: {lead_config.provider}",
         )
 
 
@@ -126,7 +118,7 @@ async def generate_report() -> ReportResponse:
             await graph.initialize()
 
             try:
-                adapter = _create_primary_adapter(config)
+                adapter = _create_lead_adapter(config)
                 north_star = config.get_north_star(config_path.parent)
 
                 synthesizer = ReportSynthesizer(graph, adapter, north_star)
