@@ -1,10 +1,19 @@
 /**
  * Real-time event feed showing WebSocket events.
+ * Following the list pattern from design guide.
  */
 
 import React from 'react';
 import { useCycleStore } from '../../stores/cycleStore';
-import './EventFeed.css';
+import {
+  RefreshCw,
+  Bot,
+  FileText,
+  Sparkles,
+  CheckCircle2,
+  XCircle,
+  Clock
+} from 'lucide-react';
 
 const EventFeed: React.FC = () => {
   const events = useCycleStore((state) => state.events);
@@ -15,20 +24,13 @@ const EventFeed: React.FC = () => {
   };
 
   const getEventIcon = (type: string) => {
-    if (type.startsWith('cycle.')) return '🔄';
-    if (type.startsWith('agent.')) return '🤖';
-    if (type.startsWith('node.')) return '📄';
-    if (type.startsWith('synthesis.')) return '🔮';
-    return '•';
-  };
-
-  const getEventColor = (type: string) => {
-    if (type === 'cycle.started') return 'blue';
-    if (type === 'cycle.completed') return 'green';
-    if (type === 'cycle.failed') return 'red';
-    if (type === 'agent.completed') return 'green';
-    if (type === 'node.created') return 'cyan';
-    return 'gray';
+    if (type.startsWith('cycle.')) return RefreshCw;
+    if (type.startsWith('agent.')) return Bot;
+    if (type.startsWith('node.')) return FileText;
+    if (type.startsWith('synthesis.')) return Sparkles;
+    if (type === 'cycle.completed') return CheckCircle2;
+    if (type === 'cycle.failed') return XCircle;
+    return Clock;
   };
 
   const formatEventMessage = (event: any) => {
@@ -59,29 +61,50 @@ const EventFeed: React.FC = () => {
   };
 
   return (
-    <div className="event-feed">
-      <h3>Live Events</h3>
-      <div className="events-list">
-        {events.length === 0 ? (
-          <div className="no-events">
-            <p>No events yet. Run a research cycle to see live updates.</p>
+    <div className="rounded-lg border bg-card">
+      {events.length === 0 ? (
+        <div className="p-8 text-center">
+          <Clock className="mx-auto h-8 w-8 text-muted-foreground" />
+          <p className="mt-4 text-sm text-muted-foreground">
+            No events yet. Run a research cycle to see live updates.
+          </p>
+          <div className="mt-4 rounded bg-muted px-3 py-2 text-left inline-block">
+            <p className="text-xs font-semibold text-muted-foreground">
+              RUN COMMAND
+            </p>
+            <code className="mt-1 block text-sm">
+              winterfox run -n 1
+            </code>
           </div>
-        ) : (
-          events.map((event, index) => (
-            <div
-              key={`${event.timestamp}-${index}`}
-              className={`event-item event-${getEventColor(event.type)}`}
-            >
-              <div className="event-header">
-                <span className="event-icon">{getEventIcon(event.type)}</span>
-                <span className="event-type">{event.type}</span>
-                <span className="event-time">{formatTimestamp(event.timestamp)}</span>
+        </div>
+      ) : (
+        <div className="divide-y">
+          {events.map((event, index) => {
+            const Icon = getEventIcon(event.type);
+            return (
+              <div
+                key={`${event.timestamp}-${index}`}
+                className="flex gap-3 p-4 transition-colors hover:bg-muted/50"
+              >
+                <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <div className="flex-1 space-y-1">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      {event.type}
+                    </span>
+                    <span className="text-xs tabular-nums text-muted-foreground">
+                      {formatTimestamp(event.timestamp)}
+                    </span>
+                  </div>
+                  <p className="text-sm leading-relaxed">
+                    {formatEventMessage(event)}
+                  </p>
+                </div>
               </div>
-              <div className="event-message">{formatEventMessage(event)}</div>
-            </div>
-          ))
-        )}
-      </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };
