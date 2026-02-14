@@ -88,6 +88,18 @@ class AgentAdapter(Protocol):
         """Whether this model can search natively (extended thinking, etc.)."""
         ...
 
+    async def verify(self) -> None:
+        """
+        Verify that the agent's API key is valid.
+
+        Makes a minimal API call to check authentication.
+
+        Raises:
+            AgentAuthenticationError: If credentials are invalid
+            Exception: If verification fails for other reasons
+        """
+        ...
+
     async def run(
         self,
         system_prompt: str,

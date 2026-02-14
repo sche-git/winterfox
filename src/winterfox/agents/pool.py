@@ -14,6 +14,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from .adapters.base import AgentAuthenticationError
 from .protocol import AgentAdapter, AgentOutput, Finding, ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -88,8 +89,12 @@ class AgentPool:
 
         # Handle exceptions
         results = []
+        auth_failures = []
         for i, output in enumerate(outputs):
-            if isinstance(output, Exception):
+            if isinstance(output, AgentAuthenticationError):
+                auth_failures.append(str(output))
+                logger.error(f"Agent {self.adapters[i].name}: {output}")
+            elif isinstance(output, Exception):
                 logger.error(
                     f"Agent {self.adapters[i].name} failed: {output}",
                     exc_info=output,
@@ -112,6 +117,17 @@ class AgentPool:
                 )
             else:
                 results.append(output)
+
+        # If all agents failed due to auth, raise so the user sees a clear error
+        if auth_failures and not results:
+            raise AgentAuthenticationError(
+                provider=", ".join(a.name for a in self.adapters),
+                api_key_env="(see above)",
+            )
+
+        # Log auth failures as warnings if some agents succeeded
+        for msg in auth_failures:
+            logger.warning(msg)
 
         return results
 

@@ -23,6 +23,18 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 
+class AgentAuthenticationError(Exception):
+    """Raised when an agent fails due to invalid or missing API key."""
+
+    def __init__(self, provider: str, api_key_env: str):
+        self.provider = provider
+        self.api_key_env = api_key_env
+        super().__init__(
+            f"{provider} authentication failed. "
+            f"Check that {api_key_env} is set to a valid API key."
+        )
+
+
 class BaseAdapter:
     """Base class with shared adapter utilities."""
 

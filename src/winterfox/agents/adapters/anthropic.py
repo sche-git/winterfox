@@ -18,7 +18,7 @@ from typing import Any
 import anthropic
 
 from ..protocol import AgentOutput, Evidence, Finding, SearchRecord, ToolDefinition
-from .base import BaseAdapter, extract_json_from_text
+from .base import AgentAuthenticationError, BaseAdapter, extract_json_from_text
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +60,19 @@ class AnthropicAdapter(BaseAdapter):
     def name(self) -> str:
         """Human-readable agent name."""
         return f"claude-{self.model}"
+
+    async def verify(self) -> None:
+        """Verify API key with a minimal request."""
+        try:
+            await self.client.messages.create(
+                model=self.model,
+                max_tokens=1,
+                messages=[{"role": "user", "content": "hi"}],
+            )
+        except anthropic.AuthenticationError as e:
+            raise AgentAuthenticationError(
+                provider="Anthropic/Claude", api_key_env="ANTHROPIC_API_KEY"
+            ) from e
 
     def _convert_tool_to_anthropic_schema(self, tool: ToolDefinition) -> dict[str, Any]:
         """
@@ -276,6 +289,11 @@ tool for simple factual lookups or when you need structured results.
                 input_tokens=total_input_tokens,
                 output_tokens=total_output_tokens,
             )
+
+        except anthropic.AuthenticationError as e:
+            raise AgentAuthenticationError(
+                provider="Anthropic/Claude", api_key_env="ANTHROPIC_API_KEY"
+            ) from e
 
         except Exception as e:
             logger.error(f"Error in Claude agent: {e}", exc_info=True)

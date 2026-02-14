@@ -202,8 +202,8 @@ async def test_llm_synthesis_multi_agent():
     assert result.findings[0].confidence == 0.85
     assert "consensus" in result.findings[0].tags
 
-    # Verify cost (2 research calls + 1 synthesis)
-    assert result.total_cost_usd == 0.025  # 0.01 + 0.01 + 0.005
+    # Verify cost (agent1 patched=0.005, agent2=0.01, synthesis=0.005)
+    assert result.total_cost_usd == 0.02
 
     # Verify synthesis reasoning
     assert "consensus" in result.synthesis_reasoning.lower()

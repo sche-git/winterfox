@@ -127,6 +127,55 @@ async def note_finding(
     }
 
 
+def create_note_finding_tool() -> "ToolDefinition":
+    """
+    Create a standalone note_finding ToolDefinition.
+
+    Used by the synthesis step in AgentPool where only the note_finding
+    tool is needed (no search or graph read).
+
+    Returns:
+        ToolDefinition for note_finding
+    """
+    from ..protocol import ToolDefinition
+
+    return ToolDefinition(
+        name="note_finding",
+        description="Record a research finding (queued for orchestrator)",
+        parameters={
+            "type": "object",
+            "properties": {
+                "claim": {
+                    "type": "string",
+                    "description": "Factual claim (2-3 sentences)",
+                },
+                "confidence": {
+                    "type": "number",
+                    "description": "Confidence 0.0-1.0",
+                    "minimum": 0,
+                    "maximum": 1,
+                },
+                "evidence": {
+                    "type": "array",
+                    "description": "List of evidence",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "text": {"type": "string"},
+                            "source": {"type": "string"},
+                        },
+                        "required": ["text", "source"],
+                    },
+                },
+            },
+            "required": ["claim", "confidence", "evidence"],
+        },
+        execute=lambda claim, confidence, evidence: note_finding(
+            claim, confidence, evidence
+        ),
+    )
+
+
 def get_graph_summary() -> str:
     """
     Get a summary of the current knowledge graph state.

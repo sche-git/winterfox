@@ -18,7 +18,7 @@ from typing import Any
 import httpx
 
 from ..protocol import AgentOutput, Evidence, Finding, SearchRecord, ToolDefinition
-from .base import BaseAdapter, extract_json_from_text
+from .base import AgentAuthenticationError, BaseAdapter, extract_json_from_text
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,34 @@ class KimiAdapter(BaseAdapter):
     def name(self) -> str:
         """Human-readable agent name."""
         return f"kimi-{self.model}"
+
+    async def verify(self) -> None:
+        """Verify API key with a minimal request."""
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "max_tokens": 1,
+                    },
+                )
+                if response.status_code in (401, 403):
+                    raise AgentAuthenticationError(
+                        provider="Kimi/Moonshot", api_key_env="MOONSHOT_API_KEY"
+                    )
+                response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (401, 403):
+                raise AgentAuthenticationError(
+                    provider="Kimi/Moonshot", api_key_env="MOONSHOT_API_KEY"
+                ) from e
+            raise
 
     def _convert_tool_to_openai_schema(self, tool: ToolDefinition) -> dict[str, Any]:
         """
@@ -262,6 +290,29 @@ class KimiAdapter(BaseAdapter):
                     input_tokens=input_tokens_estimate,
                     output_tokens=output_tokens_estimate,
                 )
+
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (401, 403):
+                raise AgentAuthenticationError(
+                    provider="Kimi/Moonshot", api_key_env="MOONSHOT_API_KEY"
+                ) from e
+            logger.error(f"Error in Kimi agent: {e}", exc_info=True)
+            duration = time.time() - start_time
+            cost = self._calculate_cost(input_tokens_estimate, output_tokens_estimate)
+
+            return AgentOutput(
+                findings=[],
+                self_critique=f"Error: {str(e)}",
+                raw_text=f"Agent failed after {iterations} iterations: {str(e)}",
+                searches_performed=[],
+                cost_usd=cost,
+                duration_seconds=duration,
+                agent_name=self.name,
+                model=self.model,
+                total_tokens=total_tokens,
+                input_tokens=input_tokens_estimate,
+                output_tokens=output_tokens_estimate,
+            )
 
         except Exception as e:
             logger.error(f"Error in Kimi agent: {e}", exc_info=True)

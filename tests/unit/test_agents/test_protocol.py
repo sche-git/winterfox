@@ -161,6 +161,9 @@ async def test_mock_agent_adapter():
         def supports_native_search(self) -> bool:
             return False
 
+        async def verify(self) -> None:
+            pass
+
         async def run(
             self,
             system_prompt: str,

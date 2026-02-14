@@ -666,6 +666,7 @@ async def _run_cycles(
 
     # Initialize agents
     from .agents.adapters.anthropic import AnthropicAdapter
+    from .agents.adapters.base import AgentAuthenticationError
     from .agents.adapters.kimi import KimiAdapter
     from .agents.adapters.openrouter import OpenRouterAdapter
     from .agents.pool import AgentPool
@@ -673,6 +674,7 @@ async def _run_cycles(
     api_keys = config.get_agent_api_keys()
 
     adapters = []
+    primary_provider = None
     for agent_config in config.agents:
         key = f"{agent_config.provider}:{agent_config.model}"
         api_key = api_keys.get(key, "")
@@ -701,11 +703,41 @@ async def _run_cycles(
             console.print(f"[yellow]Warning: Unsupported provider {agent_config.provider}, skipping[/yellow]")
             continue
 
+        if agent_config.role == "primary":
+            primary_provider = agent_config.provider
         adapters.append(adapter)
 
-    # Get primary agent index from config
-    primary_agent_index = config.get_primary_agent_index()
-    agent_pool = AgentPool(adapters, primary_agent_index=primary_agent_index)
+    # Pre-flight: verify all agent API keys before starting research
+    verified_adapters = []
+    for adapter in adapters:
+        try:
+            await adapter.verify()
+            verified_adapters.append(adapter)
+            console.print(f"[green]✓[/green] {adapter.name}: API key verified")
+        except AgentAuthenticationError as e:
+            console.print(f"[red]✗[/red] {adapter.name}: {e}")
+        except Exception as e:
+            console.print(f"[yellow]![/yellow] {adapter.name}: verification failed ({e}), skipping")
+
+    if not verified_adapters:
+        console.print("\n[red]Error: No agents passed API key verification. Check your API keys.[/red]")
+        await graph.close()
+        raise typer.Exit(1)
+
+    if len(verified_adapters) < len(adapters):
+        console.print(
+            f"\n[yellow]Continuing with {len(verified_adapters)}/{len(adapters)} agent(s)[/yellow]"
+        )
+
+    # Determine primary agent index among verified adapters
+    primary_agent_index = 0
+    if primary_provider:
+        for i, adapter in enumerate(verified_adapters):
+            if primary_provider in adapter.name.lower():
+                primary_agent_index = i
+                break
+
+    agent_pool = AgentPool(verified_adapters, primary_agent_index=primary_agent_index)
 
     # Initialize search providers
     from .agents.tools.search import configure_search
