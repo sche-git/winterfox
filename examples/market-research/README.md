@@ -29,7 +29,7 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 export TAVILY_API_KEY="tvly-..."
 
 # 4. Run research
-winterfox cycle -n 10
+winterfox run -n 10
 
 # 5. Export results
 winterfox export report.md
@@ -104,8 +104,8 @@ Next 5-10 cycles: Focus on specific areas with low confidence
 
 ```bash
 # After initial exploration
-winterfox cycle --focus "buyer personas" -n 5
-winterfox cycle --focus "pricing strategy" -n 5
+winterfox run --focus "buyer personas" -n 5
+winterfox run --focus "pricing strategy" -n 5
 ```
 
 ### 2. Use Interactive Mode for Control

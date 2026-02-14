@@ -169,7 +169,7 @@ enforce_isolation = false
 #    (or copy this file to your project directory as winterfox.toml)
 #
 # 3. Run research:
-#    winterfox cycle -n 10  # Run 10 cycles
+#    winterfox run -n 10  # Run 10 cycles
 #
 # 4. Check progress:
 #    winterfox status

@@ -347,7 +347,7 @@ uv run pytest tests/unit/test_orchestrator/ tests/integration/test_end_to_end.py
 #### 1. `cli.py` - Typer CLI
 **Commands**:
 - `winterfox init` - Initialize project
-- `winterfox cycle` - Run research cycles
+- `winterfox run` - Run research cycles
 - `winterfox status` - Show graph summary
 - `winterfox show <node_id>` - Focused view
 - `winterfox export` - Export markdown/JSON

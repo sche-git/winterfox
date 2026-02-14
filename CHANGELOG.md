@@ -44,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **CLI Interface**: 6 commands with rich output
   - `winterfox init` - Initialize projects
-  - `winterfox cycle` - Run research cycles
+  - `winterfox run` - Run research cycles
   - `winterfox status` - View progress
   - `winterfox show` - View node details
   - `winterfox export` - Export to markdown/JSON

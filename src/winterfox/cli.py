@@ -136,7 +136,7 @@ def init(
             f"Database: {db_path}\n\n"
             "[dim]Next steps:[/dim]\n"
             f"1. Set API keys in environment:\n{api_keys_str}\n\n"
-            "2. Run your first cycle: winterfox cycle",
+            "2. Run your first cycle: winterfox run",
             title="Project Initialized",
             border_style="green",
         ))
@@ -358,7 +358,7 @@ async def _init_database(db_path: Path) -> None:
 
 
 @app.command()
-def cycle(
+def run(
     n: int = typer.Option(1, "--count", "-n", help="Number of cycles to run"),
     focus: Optional[str] = typer.Option(None, "--focus", "-f", help="Specific node ID to research"),
     config: Path = typer.Option(Path("winterfox.toml"), "--config", "-c", help="Config file path"),
@@ -366,7 +366,7 @@ def cycle(
     no_consensus: bool = typer.Option(False, "--no-consensus", help="Disable multi-agent consensus"),
 ) -> None:
     """
-    Run research cycle(s).
+    Run research cycles.
 
     A cycle:
     1. Selects a target node (or uses --focus)
@@ -376,9 +376,9 @@ def cycle(
     5. Propagates confidence changes
 
     Example:
-        winterfox cycle                    # Run 1 cycle
-        winterfox cycle -n 10              # Run 10 cycles
-        winterfox cycle --focus node-123   # Research specific node
+        winterfox run                    # Run 1 cycle
+        winterfox run -n 10              # Run 10 cycles
+        winterfox run --focus node-123   # Research specific node
     """
     setup_logging(level=log_level)
 
@@ -592,7 +592,7 @@ async def _show_status(config_path: Path, max_depth: int) -> None:
     # Get stats
     nodes = await graph.get_all_active_nodes()
     if not nodes:
-        console.print("[yellow]Graph is empty. Run 'winterfox cycle' to start research.[/yellow]")
+        console.print("[yellow]Graph is empty. Run 'winterfox run' to start research.[/yellow]")
         await graph.close()
         return
 

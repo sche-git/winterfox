@@ -43,7 +43,7 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 export TAVILY_API_KEY="tvly-..."
 
 # Run research cycles
-winterfox cycle -n 10
+winterfox run -n 10
 
 # Check progress
 winterfox status
@@ -169,14 +169,14 @@ Creates:
 - `.winterfox/graph.db` - SQLite database
 - `.winterfox/raw/` - Raw agent outputs
 
-### `winterfox cycle`
+### `winterfox run`
 Run research cycles.
 
 ```bash
-winterfox cycle                     # Run 1 cycle
-winterfox cycle -n 10               # Run 10 cycles
-winterfox cycle --focus node-123    # Research specific node
-winterfox cycle --no-consensus      # Disable multi-agent consensus
+winterfox run                     # Run 1 cycle
+winterfox run -n 10               # Run 10 cycles
+winterfox run --focus node-123    # Research specific node
+winterfox run --no-consensus      # Disable multi-agent consensus
 ```
 
 ### `winterfox status`

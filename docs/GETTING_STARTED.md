@@ -132,7 +132,7 @@ git_auto_commit = false  # Set to true if using git
 
 ```bash
 # Run 1 research cycle
-winterfox cycle
+winterfox run
 
 # Watch the output:
 # ✓ Selecting target node...
@@ -188,7 +188,7 @@ Let's run 10 more cycles to deepen the research:
 
 ```bash
 # Run 10 cycles
-winterfox cycle -n 10
+winterfox run -n 10
 
 # This will take ~5-10 minutes depending on:
 # - How many searches Claude performs per cycle
@@ -396,7 +396,7 @@ api_key_env = "MOONSHOT_API_KEY"
 Run with consensus:
 
 ```bash
-winterfox cycle -n 5
+winterfox run -n 5
 
 # Winterfox will:
 # 1. Dispatch to both agents in parallel
@@ -411,7 +411,7 @@ Research a specific area:
 
 ```bash
 # Research competition specifically
-winterfox cycle --focus "competition landscape"
+winterfox run --focus "competition landscape"
 
 # This finds nodes matching "competition" and prioritizes them
 ```
@@ -420,7 +420,7 @@ winterfox cycle --focus "competition landscape"
 
 ```bash
 # Run until average confidence reaches 0.8 (max 50 cycles)
-winterfox cycle --until 0.8 --max 50
+winterfox run --until 0.8 --max 50
 ```
 
 ### Programmatic Usage
@@ -499,7 +499,7 @@ source ~/.zshrc
 
 **Solution**:
 - Wait a few minutes
-- Reduce cycles: `winterfox cycle -n 1` instead of `-n 10`
+- Reduce cycles: `winterfox run -n 1` instead of `-n 10`
 - Use multiple search providers for redundancy
 
 ### "Search failed"

@@ -388,9 +388,9 @@ config = ResearchConfig.from_toml("winterfox.toml")
 winterfox init "Project Name" --north-star north-star.md
 
 # Run research cycles
-winterfox cycle -n 10  # Run 10 cycles
-winterfox cycle --focus "specific topic"  # Focus on specific area
-winterfox cycle --until-confidence 0.8  # Run until target confidence
+winterfox run -n 10  # Run 10 cycles
+winterfox run --focus "specific topic"  # Focus on specific area
+winterfox run --until-confidence 0.8  # Run until target confidence
 
 # View progress
 winterfox status  # Summary view
