@@ -41,6 +41,8 @@ class Orchestrator:
         max_searches_per_cycle: int = 25,
         confidence_discount: float = 0.7,
         consensus_boost: float = 0.15,
+        search_instructions: str | None = None,
+        context_files: list[dict[str, str]] | None = None,
     ):
         """
         Initialize orchestrator.
@@ -53,6 +55,8 @@ class Orchestrator:
             max_searches_per_cycle: Max web searches per agent per cycle
             confidence_discount: Discount for initial finding confidence (0.7)
             consensus_boost: Boost when agents agree (0.15)
+            search_instructions: Optional custom search guidance
+            context_files: Optional prior research documents
         """
         self.graph = graph
         self.agent_pool = agent_pool
@@ -61,6 +65,8 @@ class Orchestrator:
         self.max_searches_per_cycle = max_searches_per_cycle
         self.confidence_discount = confidence_discount
         self.consensus_boost = consensus_boost
+        self.search_instructions = search_instructions
+        self.context_files = context_files or []
 
         self.cycle_count = 0
         self.total_cost_usd = 0.0
@@ -94,6 +100,8 @@ class Orchestrator:
             tools=self.tools,
             north_star=self.north_star,
             cycle_id=self.cycle_count,
+            search_instructions=self.search_instructions,
+            context_files=self.context_files,
         )
 
         # Execute cycle

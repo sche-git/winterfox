@@ -52,6 +52,8 @@ class ResearchCycle:
         tools: list["ToolDefinition"],
         north_star: str,
         cycle_id: int,
+        search_instructions: str | None = None,
+        context_files: list[dict[str, str]] | None = None,
     ):
         """
         Initialize research cycle.
@@ -62,12 +64,16 @@ class ResearchCycle:
             tools: Available tools for agents
             north_star: Project mission/north star
             cycle_id: Current cycle number
+            search_instructions: Optional custom search guidance
+            context_files: Optional prior research documents
         """
         self.graph = graph
         self.agent_pool = agent_pool
         self.tools = tools
         self.north_star = north_star
         self.cycle_id = cycle_id
+        self.search_instructions = search_instructions
+        self.context_files = context_files or []
         self.last_selected_id: str | None = None
 
     async def execute(
@@ -117,6 +123,8 @@ class ResearchCycle:
                 target,
                 self.north_star,
                 max_searches,
+                search_instructions=self.search_instructions,
+                context_files=self.context_files,
             )
 
             # Step 3: Dispatch agents

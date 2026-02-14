@@ -41,6 +41,7 @@ def init(
         None, "--north-star", "-n", help="Mission statement (or use interactive prompt)"
     ),
     interactive: bool = typer.Option(True, "--interactive/--no-interactive", help="Interactive setup"),
+    skip_context: bool = typer.Option(False, "--skip-context", help="Skip additional context setup"),
 ) -> None:
     """
     Initialize a new research project.
@@ -97,12 +98,91 @@ def init(
 
         # Create .winterfox/ directory structure
         (path / ".winterfox" / "raw").mkdir(parents=True, exist_ok=True)
+        (path / ".winterfox" / "context").mkdir(parents=True, exist_ok=True)
 
         # Initialize database
         from .graph.store import KnowledgeGraph
 
         db_path = path / ".winterfox" / "graph.db"
         asyncio.run(_init_database(db_path))
+
+        # Optional: Additional context setup
+        search_instructions_path = None
+        context_files = []
+
+        if interactive and not skip_context:
+            console.print("\n[bold cyan]═══ Additional Research Context (Optional) ═══[/bold cyan]\n")
+            console.print("You can provide additional context to guide the research:\n")
+            console.print("  • Search instructions: How agents should search and what to prioritize")
+            console.print("  • Context documents: Prior research, PDFs, notes, etc.\n")
+
+            add_context = typer.confirm("Would you like to add additional context?", default=False)
+
+            if add_context:
+                # Search instructions
+                console.print("\n[bold]Search Instructions[/bold]")
+                console.print("Provide guidance on how agents should perform research.")
+                console.print("Examples: 'Focus on academic papers', 'Prioritize recent news', etc.\n")
+
+                has_instructions = typer.confirm("Add search instructions?", default=False)
+                if has_instructions:
+                    instructions_source = typer.prompt(
+                        "Enter instructions (or file path starting with @)",
+                        default=""
+                    )
+
+                    if instructions_source:
+                        if instructions_source.startswith("@"):
+                            # Read from file
+                            source_file = Path(instructions_source[1:])
+                            if source_file.exists():
+                                instructions_content = source_file.read_text(encoding="utf-8")
+                            else:
+                                console.print(f"[yellow]Warning: File not found: {source_file}[/yellow]")
+                                instructions_content = ""
+                        else:
+                            # Inline instructions
+                            instructions_content = instructions_source
+
+                        if instructions_content:
+                            search_instructions_path = path / ".winterfox" / "search_instructions.md"
+                            search_instructions_path.write_text(instructions_content, encoding="utf-8")
+                            console.print(f"[green]✓[/green] Saved to {search_instructions_path.relative_to(path)}")
+
+                # Context documents
+                console.print("\n[bold]Context Documents[/bold]")
+                console.print("Add prior research, notes, or any relevant documents.")
+                console.print("These will be available to agents during research.\n")
+
+                has_docs = typer.confirm("Add context documents?", default=False)
+                if has_docs:
+                    console.print("\nEnter file paths, one per line (empty line to finish):")
+                    while True:
+                        doc_path = typer.prompt("Document path", default="", show_default=False)
+                        if not doc_path:
+                            break
+
+                        source = Path(doc_path)
+                        if source.exists():
+                            # Copy to .winterfox/context/
+                            import shutil
+                            dest = path / ".winterfox" / "context" / source.name
+                            shutil.copy2(source, dest)
+                            context_files.append(f".winterfox/context/{source.name}")
+                            console.print(f"[green]✓[/green] Copied {source.name}")
+                        else:
+                            console.print(f"[yellow]Warning: File not found: {source}[/yellow]")
+
+                if search_instructions_path or context_files:
+                    console.print(f"\n[green]✓[/green] Added {len(context_files)} context document(s)")
+
+        # Update config with context paths
+        if search_instructions_path or context_files:
+            _update_config_with_context(
+                config_path,
+                search_instructions_path.relative_to(path) if search_instructions_path else None,
+                context_files
+            )
 
         # Success message with API key reminders
         api_keys_needed = set()
@@ -146,6 +226,58 @@ def init(
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
+
+
+def _update_config_with_context(
+    config_path: Path,
+    search_instructions: Path | None,
+    context_files: list[str],
+) -> None:
+    """
+    Update winterfox.toml with context paths.
+
+    Args:
+        config_path: Path to winterfox.toml
+        search_instructions: Relative path to search instructions file
+        context_files: List of relative paths to context files
+    """
+    # Read current config
+    content = config_path.read_text(encoding="utf-8")
+
+    # Find [project] section and add context fields
+    lines = content.split("\n")
+    project_end = -1
+
+    for i, line in enumerate(lines):
+        if line.startswith("[project]"):
+            # Find end of [project] section (next section or empty line followed by section)
+            for j in range(i + 1, len(lines)):
+                if lines[j].startswith("[") and not lines[j].startswith("[project]"):
+                    project_end = j
+                    break
+            break
+
+    if project_end == -1:
+        # [project] is last section, append at end
+        project_end = len(lines)
+
+    # Insert context fields before next section
+    insert_lines = []
+
+    if search_instructions:
+        insert_lines.append(f'search_instructions = "{search_instructions}"')
+
+    if context_files:
+        files_str = ', '.join(f'"{f}"' for f in context_files)
+        insert_lines.append(f'context_files = [{files_str}]')
+
+    if insert_lines:
+        # Insert before the next section
+        for line in reversed(insert_lines):
+            lines.insert(project_end, line)
+
+        # Write back
+        config_path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def _prompt_agent_setup() -> list[dict]:
@@ -622,6 +754,8 @@ async def _run_cycles(
     from .orchestrator import Orchestrator
 
     north_star = config.get_north_star(config_path.parent)
+    search_instructions = config.get_search_instructions(config_path.parent)
+    context_files = config.get_context_files_content(config_path.parent)
 
     orchestrator = Orchestrator(
         graph=graph,
@@ -631,6 +765,8 @@ async def _run_cycles(
         max_searches_per_cycle=config.orchestrator.max_searches_per_agent,
         confidence_discount=config.orchestrator.confidence_discount,
         consensus_boost=config.orchestrator.consensus_boost,
+        search_instructions=search_instructions,
+        context_files=context_files,
     )
 
     # Run cycles with progress

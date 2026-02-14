@@ -22,6 +22,8 @@ async def generate_research_prompt(
     target_node: "KnowledgeNode",
     north_star: str,
     max_searches: int = 25,
+    search_instructions: str | None = None,
+    context_files: list[dict[str, str]] | None = None,
 ) -> tuple[str, str]:
     """
     Generate system and user prompts for researching a target node.
@@ -31,6 +33,8 @@ async def generate_research_prompt(
         target_node: Node to research
         north_star: Project mission/north star
         max_searches: Maximum web searches allowed
+        search_instructions: Optional custom search guidance
+        context_files: Optional prior research documents
 
     Returns:
         (system_prompt, user_prompt) tuple
@@ -40,6 +44,16 @@ async def generate_research_prompt(
     # Generate focused view of target and context
     focused_view = await render_focused_view(graph, target_node.id, max_depth=3)
 
+    # Build search instructions section
+    search_guidance = ""
+    if search_instructions:
+        search_guidance = f"""
+## Custom Search Instructions
+
+{search_instructions}
+
+"""
+
     # System prompt (role and capabilities)
     system_prompt = f"""You are an expert research agent working on the following mission:
 
@@ -48,7 +62,7 @@ async def generate_research_prompt(
 Your role is to conduct thorough, evidence-based research to build a knowledge graph.
 You have access to web search and content fetching tools. Use them extensively to gather
 high-quality, verifiable information.
-
+{search_guidance}
 ## Guidelines
 
 1. **Evidence-Based**: Every claim needs strong evidence from credible sources
@@ -78,11 +92,25 @@ When you discover information, use the note_finding tool with:
 
 Your research will be merged with findings from other agents, so focus on verifiable facts."""
 
+    # Build context section
+    context_section = ""
+    if context_files:
+        context_section = "\n## Prior Research & Context Documents\n\n"
+        context_section += "You have access to prior research. Use this to avoid redundant work and build on existing knowledge:\n\n"
+
+        for doc in context_files:
+            # Truncate very long documents
+            content = doc["content"]
+            if len(content) > 2000:
+                content = content[:2000] + "\n\n[Document truncated for brevity...]"
+
+            context_section += f"### {doc['filename']}\n\n{content}\n\n"
+
     # User prompt (specific research task)
     user_prompt = f"""## Current Knowledge State
 
 {focused_view}
-
+{context_section}
 ## Research Objective
 
 Focus on: **{target_node.claim}**

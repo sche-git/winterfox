@@ -4,6 +4,7 @@ Configuration loading and validation for winterfox.
 Loads winterfox.toml files and validates settings using Pydantic.
 """
 
+import logging
 import os
 from pathlib import Path
 from typing import Literal
@@ -14,6 +15,8 @@ except ImportError:
     import tomli as tomllib  # type: ignore
 
 from pydantic import BaseModel, Field, field_validator
+
+logger = logging.getLogger(__name__)
 
 
 class AgentConfig(BaseModel):
@@ -93,6 +96,8 @@ class ProjectConfig(BaseModel):
 
     name: str
     north_star: str | Path  # Can be inline string or path to .md file
+    search_instructions: str | Path | None = None  # Optional search guidance
+    context_files: list[str | Path] = Field(default_factory=list)  # Prior research docs
 
 
 class ResearchConfig(BaseModel):
@@ -164,6 +169,75 @@ class ResearchConfig(BaseModel):
             raise FileNotFoundError(f"North star file not found: {path}")
 
         return path.read_text(encoding="utf-8")
+
+    def get_search_instructions(self, base_path: Path | None = None) -> str | None:
+        """
+        Get search instructions content.
+
+        Args:
+            base_path: Base directory for resolving relative paths
+
+        Returns:
+            Search instructions as string, or None if not provided
+        """
+        if not self.project.search_instructions:
+            return None
+
+        instructions = self.project.search_instructions
+
+        # If it's a string (inline), return it
+        if isinstance(instructions, str) and not instructions.endswith((".md", ".txt")):
+            return instructions
+
+        # Otherwise, treat as file path
+        path = Path(instructions)
+        if base_path and not path.is_absolute():
+            path = base_path / path
+
+        if not path.exists():
+            raise FileNotFoundError(f"Search instructions file not found: {path}")
+
+        return path.read_text(encoding="utf-8")
+
+    def get_context_files_content(self, base_path: Path | None = None) -> list[dict[str, str]]:
+        """
+        Get content from all context files.
+
+        Args:
+            base_path: Base directory for resolving relative paths
+
+        Returns:
+            List of dicts with 'filename' and 'content' keys
+        """
+        if not self.project.context_files:
+            return []
+
+        context_data = []
+
+        for file_path in self.project.context_files:
+            path = Path(file_path)
+            if base_path and not path.is_absolute():
+                path = base_path / path
+
+            if not path.exists():
+                logger.warning(f"Context file not found: {path}")
+                continue
+
+            try:
+                # For now, only support text files (md, txt)
+                # TODO: Add PDF, DOCX support later
+                if path.suffix.lower() in [".md", ".txt"]:
+                    content = path.read_text(encoding="utf-8")
+                    context_data.append({
+                        "filename": path.name,
+                        "content": content,
+                    })
+                else:
+                    logger.warning(f"Unsupported file format: {path} (only .md, .txt supported)")
+            except Exception as e:
+                logger.error(f"Failed to read context file {path}: {e}")
+
+        return context_data
 
     def get_agent_api_keys(self) -> dict[str, str]:
         """
