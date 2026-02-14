@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, field_validator
 class AgentConfig(BaseModel):
     """Configuration for a single agent."""
 
-    provider: str  # "anthropic", "moonshot", "openai", "xai", "google"
+    provider: str  # "anthropic", "moonshot", "openai", "xai", "google", "openrouter"
     model: str
     api_key_env: str
     timeout_seconds: int = 300
@@ -277,6 +277,7 @@ def create_default_config(
             "openai": "OPENAI_API_KEY",
             "google": "GOOGLE_API_KEY",
             "xai": "XAI_API_KEY",
+            "openrouter": "OPENROUTER_API_KEY",
         }
         api_key_env = api_key_map.get(agent["provider"], "API_KEY")
 

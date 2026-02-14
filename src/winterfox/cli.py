@@ -106,6 +106,7 @@ def init(
 
         # Success message with API key reminders
         api_keys_needed = set()
+        openrouter_configured = False
         for agent in agents_config:
             if agent["provider"] == "anthropic":
                 api_keys_needed.add("ANTHROPIC_API_KEY")
@@ -117,6 +118,10 @@ def init(
                 api_keys_needed.add("GOOGLE_API_KEY")
             elif agent["provider"] == "xai":
                 api_keys_needed.add("XAI_API_KEY")
+            elif agent["provider"] == "openrouter":
+                openrouter_configured = True
+                if not agent.get("_api_key_value"):
+                    api_keys_needed.add("OPENROUTER_API_KEY")
 
         for search in search_config:
             if search["name"] == "tavily":
@@ -187,12 +192,19 @@ def _prompt_agent_setup() -> list[dict]:
             "cost": "Beta pricing varies",
             "supports_native_search": False,
         },
+        "6": {
+            "name": "OpenRouter (Multiple Models)",
+            "provider": "openrouter",
+            "model": None,  # Will be selected from API
+            "cost": "Varies by model",
+            "supports_native_search": False,  # Depends on model
+        },
     }
 
     # Display options
     table = Table(title="Available LLMs", show_header=True, header_style="bold magenta")
     table.add_column("ID", style="cyan", width=4)
-    table.add_column("LLM", style="white", width=30)
+    table.add_column("LLM", style="white", width=35)
     table.add_column("Cost", style="yellow", width=40)
 
     for id, llm in llm_options.items():
@@ -213,7 +225,101 @@ def _prompt_agent_setup() -> list[dict]:
 
     for id in selected_ids:
         if id in llm_options:
-            selected_llms.append(llm_options[id])
+            llm = llm_options[id].copy()
+
+            # Handle OpenRouter - fetch models from API
+            if llm["provider"] == "openrouter":
+                console.print("\n[bold cyan]OpenRouter selected![/bold cyan]")
+                console.print("OpenRouter provides access to many models through one API.")
+                console.print("You'll need an OpenRouter API key to fetch available models.\n")
+
+                api_key = typer.prompt("Enter your OpenRouter API key", hide_input=True)
+
+                try:
+                    import asyncio
+                    from .agents.adapters.openrouter import fetch_openrouter_models
+
+                    with console.status("[bold green]Fetching models from OpenRouter..."):
+                        models = asyncio.run(fetch_openrouter_models(api_key))
+
+                    if not models:
+                        console.print("[red]No models available from OpenRouter[/red]")
+                        continue
+
+                    # Display models
+                    console.print(f"\n[green]✓[/green] Found {len(models)} models\n")
+
+                    # Filter to popular/recommended models for better UX
+                    popular_models = [
+                        m for m in models
+                        if any(keyword in m["id"].lower() for keyword in [
+                            "claude", "gpt-4", "gpt-3.5", "gemini", "llama-3",
+                            "mixtral", "qwen", "deepseek"
+                        ])
+                    ]
+
+                    if not popular_models:
+                        popular_models = models[:20]  # Fallback to first 20
+
+                    # Create model selection table
+                    model_table = Table(title="OpenRouter Models", show_header=True)
+                    model_table.add_column("ID", style="cyan", width=4)
+                    model_table.add_column("Model", style="white", width=40)
+                    model_table.add_column("Context", style="yellow", width=12)
+                    model_table.add_column("Cost (1M tokens)", style="green", width=25)
+
+                    model_map = {}
+                    for i, model in enumerate(popular_models[:30], 1):  # Show max 30
+                        model_id = model["id"]
+                        model_name = model.get("name", model_id)
+                        context_length = model.get("context_length", "N/A")
+
+                        # Format pricing
+                        pricing = model.get("pricing", {})
+                        prompt_price = float(pricing.get("prompt", 0)) * 1_000_000
+                        completion_price = float(pricing.get("completion", 0)) * 1_000_000
+                        price_str = f"${prompt_price:.2f}in/${completion_price:.2f}out"
+
+                        model_table.add_row(
+                            str(i),
+                            model_name[:38],
+                            str(context_length),
+                            price_str
+                        )
+                        model_map[str(i)] = model
+
+                    console.print(model_table)
+
+                    # Let user select model
+                    console.print("\n[bold]Select a model[/bold]")
+                    model_selection = typer.prompt("Model ID", default="1")
+
+                    if model_selection not in model_map:
+                        console.print(f"[yellow]Invalid selection, skipping OpenRouter[/yellow]")
+                        continue
+
+                    selected_model = model_map[model_selection]
+
+                    # Update llm config with selected model
+                    llm["model"] = selected_model["id"]
+                    llm["name"] = f"OpenRouter: {selected_model.get('name', selected_model['id'])}"
+                    llm["cost"] = f"${float(selected_model.get('pricing', {}).get('prompt', 0)) * 1_000_000:.2f} input / ${float(selected_model.get('pricing', {}).get('completion', 0)) * 1_000_000:.2f} output per 1M tokens"
+
+                    # Check if model supports native search (Claude, Gemini)
+                    model_id_lower = selected_model["id"].lower()
+                    llm["supports_native_search"] = any(
+                        keyword in model_id_lower for keyword in ["claude", "gemini"]
+                    )
+
+                    # Store API key temporarily for config generation
+                    llm["_api_key_value"] = api_key
+
+                except Exception as e:
+                    console.print(f"[red]Failed to fetch OpenRouter models: {e}[/red]")
+                    console.print("[yellow]Skipping OpenRouter[/yellow]")
+                    continue
+
+            selected_llms.append(llm)
         else:
             console.print(f"[yellow]Warning: Invalid option '{id}', skipping[/yellow]")
 
@@ -252,6 +358,7 @@ def _prompt_agent_setup() -> list[dict]:
             "model": llm["model"],
             "role": role,
             "supports_native_search": llm["supports_native_search"],
+            "_api_key_value": llm.get("_api_key_value"),  # For OpenRouter
         })
 
     # Summary
@@ -436,6 +543,7 @@ async def _run_cycles(
     # Initialize agents
     from .agents.adapters.anthropic import AnthropicAdapter
     from .agents.adapters.kimi import KimiAdapter
+    from .agents.adapters.openrouter import OpenRouterAdapter
     from .agents.pool import AgentPool
 
     api_keys = config.get_agent_api_keys()
@@ -457,6 +565,13 @@ async def _run_cycles(
                 model=agent_config.model,
                 api_key=api_key,
                 timeout=agent_config.timeout_seconds,
+            )
+        elif agent_config.provider == "openrouter":
+            adapter = OpenRouterAdapter(
+                model=agent_config.model,
+                api_key=api_key,
+                timeout=agent_config.timeout_seconds,
+                supports_native_search=agent_config.supports_native_search,
             )
         else:
             console.print(f"[yellow]Warning: Unsupported provider {agent_config.provider}, skipping[/yellow]")
