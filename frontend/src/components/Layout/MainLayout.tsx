@@ -8,6 +8,7 @@ import { useUIStore } from '../../stores/uiStore';
 import OverviewPage from '../Overview/OverviewPage';
 import GraphPage from '../Graph/GraphPage';
 import HistoryPage from '../History/HistoryPage';
+import ReportPage from '../Report/ReportPage';
 
 const MainLayout: React.FC = () => {
   const currentPage = useUIStore((s) => s.currentPage);
@@ -20,6 +21,8 @@ const MainLayout: React.FC = () => {
         return <GraphPage />;
       case 'history':
         return <HistoryPage />;
+      case 'report':
+        return <ReportPage />;
       default:
         return <OverviewPage />;
     }

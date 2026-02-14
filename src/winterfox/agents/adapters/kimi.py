@@ -93,11 +93,7 @@ class KimiAdapter(BaseAdapter):
             "function": {
                 "name": tool.name,
                 "description": tool.description,
-                "parameters": {
-                    "type": "object",
-                    "properties": tool.parameters,
-                    "required": list(tool.parameters.keys()),
-                },
+                "parameters": tool.parameters,
             },
         }
 
@@ -121,11 +117,11 @@ class KimiAdapter(BaseAdapter):
             return f"Error: Tool '{tool_name}' not found"
 
         try:
-            # Execute tool
-            if asyncio.iscoroutinefunction(tool.execute):
-                result = await tool.execute(**tool_input)
-            else:
-                result = tool.execute(**tool_input)
+            # Execute tool — always check return value for coroutine since
+            # execute may be a lambda wrapping an async function
+            result = tool.execute(**tool_input)
+            if asyncio.iscoroutine(result):
+                result = await result
 
             # Convert result to string
             if isinstance(result, (dict, list)):
@@ -181,17 +177,20 @@ class KimiAdapter(BaseAdapter):
                 for iteration in range(max_iterations):
                     iterations = iteration + 1
 
+                    # Build request payload
+                    payload: dict[str, Any] = {
+                        "model": self.model,
+                        "messages": messages,
+                    }
+                    if openai_tools:
+                        payload["tools"] = openai_tools
+
                     # Make API call
                     response = await self._with_retry(
                         client.post,
                         f"{self.base_url}/chat/completions",
                         headers=headers,
-                        json={
-                            "model": self.model,
-                            "messages": messages,
-                            "tools": openai_tools,
-                            "temperature": 0.7,
-                        },
+                        json=payload,
                     )
 
                     response.raise_for_status()

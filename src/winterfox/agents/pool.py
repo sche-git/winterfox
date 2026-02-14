@@ -9,12 +9,10 @@ Supports:
 """
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass
 from typing import Any
 
-from .adapters.base import AgentAuthenticationError
 from .protocol import AgentAdapter, AgentOutput, Finding, ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -87,47 +85,12 @@ class AgentPool:
 
         outputs = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Handle exceptions
+        # Fail fast on any agent error
         results = []
-        auth_failures = []
         for i, output in enumerate(outputs):
-            if isinstance(output, AgentAuthenticationError):
-                auth_failures.append(str(output))
-                logger.error(f"Agent {self.adapters[i].name}: {output}")
-            elif isinstance(output, Exception):
-                logger.error(
-                    f"Agent {self.adapters[i].name} failed: {output}",
-                    exc_info=output,
-                )
-                # Create empty output for failed agent
-                results.append(
-                    AgentOutput(
-                        findings=[],
-                        self_critique=f"Agent failed: {output}",
-                        raw_text="",
-                        searches_performed=[],
-                        cost_usd=0.0,
-                        duration_seconds=0.0,
-                        agent_name=self.adapters[i].name,
-                        model="unknown",
-                        total_tokens=0,
-                        input_tokens=0,
-                        output_tokens=0,
-                    )
-                )
-            else:
-                results.append(output)
-
-        # If all agents failed due to auth, raise so the user sees a clear error
-        if auth_failures and not results:
-            raise AgentAuthenticationError(
-                provider=", ".join(a.name for a in self.adapters),
-                api_key_env="(see above)",
-            )
-
-        # Log auth failures as warnings if some agents succeeded
-        for msg in auth_failures:
-            logger.warning(msg)
+            if isinstance(output, Exception):
+                raise output
+            results.append(output)
 
         return results
 

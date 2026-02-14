@@ -3,14 +3,16 @@
  * and child nodes.
  */
 
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { useGraphStore } from '../../stores/graphStore';
 import { api } from '../../services/api';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { getNodeTypeConfig } from '@/lib/nodeTypes';
-import type { Node } from '../../types/api';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import MarkdownContent from '@/components/ui/MarkdownContent';
+import { getNodeTypeConfig, parseClaimType } from '@/lib/nodeTypes';
+import type { Node, CycleDetail } from '../../types/api';
 import {
   FileText,
   ExternalLink,
@@ -18,6 +20,9 @@ import {
   ArrowUp,
   ChevronRight,
   Loader2,
+  FlaskConical,
+  ChevronDown,
+  Bot,
 } from 'lucide-react';
 
 const NodeDetail: React.FC = () => {
@@ -27,6 +32,28 @@ const NodeDetail: React.FC = () => {
   const nodes = useGraphStore((s) => s.nodes);
   const [childNodes, setChildNodes] = useState<Node[]>([]);
   const [parentNode, setParentNode] = useState<Node | null>(null);
+  const [cycleDetail, setCycleDetail] = useState<CycleDetail | null>(null);
+  const [cycleLoading, setCycleLoading] = useState(false);
+  const [showResearch, setShowResearch] = useState(false);
+
+  // Reset research state when node changes
+  useEffect(() => {
+    setCycleDetail(null);
+    setShowResearch(false);
+  }, [selectedNode?.id]);
+
+  const loadCycleResearch = useCallback(async (cycleId: number) => {
+    if (cycleDetail?.id === cycleId) return;
+    setCycleLoading(true);
+    try {
+      const detail = await api.getCycle(cycleId);
+      setCycleDetail(detail);
+    } catch {
+      setCycleDetail(null);
+    } finally {
+      setCycleLoading(false);
+    }
+  }, [cycleDetail?.id]);
 
   // Load child and parent details when selection changes
   useEffect(() => {
@@ -118,7 +145,8 @@ const NodeDetail: React.FC = () => {
     );
   }
 
-  const typeConfig = getNodeTypeConfig(selectedNode.node_type);
+  const parsed = parseClaimType(selectedNode.claim, selectedNode.node_type);
+  const typeConfig = getNodeTypeConfig(parsed.nodeType);
 
   return (
     <div className="h-full overflow-auto">
@@ -130,12 +158,12 @@ const NodeDetail: React.FC = () => {
             className="mb-3 flex items-center gap-1.5 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
             <ArrowUp className="h-3 w-3" />
-            <span className="truncate max-w-[300px]">{parentNode.claim}</span>
+            <span className="truncate max-w-[300px]">{parseClaimType(parentNode.claim, parentNode.node_type).claim}</span>
           </button>
         )}
 
         {/* Claim */}
-        <p className="text-base leading-relaxed">{selectedNode.claim}</p>
+        <p className="text-base leading-relaxed">{parsed.claim}</p>
 
         {/* Type badge */}
         {typeConfig && (
@@ -198,6 +226,70 @@ const NodeDetail: React.FC = () => {
             {selectedNode.status}
           </Badge>
         </div>
+
+        {/* Research Source */}
+        {selectedNode.created_by_cycle > 0 && (
+          <>
+            <Separator className="my-5" />
+            <Collapsible
+              open={showResearch}
+              onOpenChange={(open) => {
+                setShowResearch(open);
+                if (open && !cycleDetail) {
+                  loadCycleResearch(selectedNode.created_by_cycle);
+                }
+              }}
+            >
+              <CollapsibleTrigger className="flex w-full items-center justify-between text-left">
+                <div className="flex items-center gap-2">
+                  <FlaskConical className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Research Source
+                  </span>
+                  <Badge variant="outline" className="text-[10px] py-0">
+                    Cycle #{selectedNode.created_by_cycle}
+                  </Badge>
+                </div>
+                <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${showResearch ? 'rotate-180' : ''}`} />
+              </CollapsibleTrigger>
+
+              <CollapsibleContent>
+                <div className="mt-3 space-y-3">
+                  {cycleLoading ? (
+                    <div className="flex items-center justify-center py-4">
+                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : cycleDetail ? (
+                    cycleDetail.agent_outputs.map((agent, i) => (
+                      <div key={i} className="rounded-md border">
+                        <div className="flex items-center gap-2 border-b px-3 py-2">
+                          <Bot className="h-3.5 w-3.5 text-muted-foreground" />
+                          <span className="text-xs font-medium">{agent.agent_name}</span>
+                          {agent.role === 'primary' && (
+                            <Badge variant="outline" className="text-[10px] py-0">primary</Badge>
+                          )}
+                        </div>
+                        {agent.raw_text ? (
+                          <div className="max-h-[500px] overflow-auto p-3">
+                            <MarkdownContent content={agent.raw_text} />
+                          </div>
+                        ) : (
+                          <p className="p-3 text-xs text-muted-foreground">
+                            No raw output available for this agent.
+                          </p>
+                        )}
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      Could not load research data.
+                    </p>
+                  )}
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
+          </>
+        )}
 
         {/* Evidence */}
         {selectedNode.evidence.length > 0 && (
@@ -304,7 +396,8 @@ const NodeDetail: React.FC = () => {
 
 /** Reusable child node row with type indicator */
 function ChildNodeRow({ child, onSelect }: { child: Node; onSelect: (id: string) => void }) {
-  const typeConfig = getNodeTypeConfig(child.node_type);
+  const parsed = parseClaimType(child.claim, child.node_type);
+  const typeConfig = getNodeTypeConfig(parsed.nodeType);
 
   return (
     <button
@@ -317,7 +410,7 @@ function ChildNodeRow({ child, onSelect }: { child: Node; onSelect: (id: string)
         <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
       )}
       <span className="flex-1 min-w-0 text-sm leading-snug line-clamp-2">
-        {child.claim}
+        {parsed.claim}
       </span>
       <span className={`shrink-0 text-[11px] tabular-nums ${typeConfig ? typeConfig.color : 'text-muted-foreground'}`}>
         {(child.confidence * 100).toFixed(0)}%

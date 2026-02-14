@@ -130,7 +130,7 @@ When you discover information, use the note_finding tool with:
   - 0.3-0.4: Weak sources, speculation
   - 0.0-0.2: Hearsay, unverified claims
 - **evidence**: List of sources with specific quotes/data points
-- **finding_type** (optional): Categorize your finding:
+- **finding_type** (required): Categorize your finding:
   - `"hypothesis"`: A proposed answer, strategy, or approach
   - `"supporting"`: Evidence that supports the parent claim/hypothesis
   - `"opposing"`: Evidence that contradicts or challenges the parent claim

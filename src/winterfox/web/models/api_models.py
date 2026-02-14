@@ -33,6 +33,8 @@ class NodeResponse(BaseModel):
     evidence: list[EvidenceItem] = Field(default_factory=list)
     status: Literal["active", "archived", "merged"] = "active"
     node_type: str | None = None
+    created_by_cycle: int = 0
+    updated_by_cycle: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -155,6 +157,7 @@ class AgentOutputSummary(BaseModel):
     searches_performed: int = Field(ge=0)
     findings_count: int = Field(ge=0)
     self_critique: str = ""
+    raw_text: str = ""
     findings: list[AgentFinding] = Field(default_factory=list)
     searches: list[AgentSearchRecord] = Field(default_factory=list)
 
@@ -305,3 +308,19 @@ class ConfigResponse(BaseModel):
     workspace_id: str
     agents: list[AgentConfigResponse]
     search_providers: list[SearchProviderResponse]
+
+
+# Report API models
+
+
+class ReportResponse(BaseModel):
+    """Generated research report."""
+
+    markdown: str
+    node_count: int = Field(ge=0)
+    cycle_count: int = Field(ge=0)
+    avg_confidence: float = Field(ge=0.0, le=1.0)
+    cost_usd: float = Field(ge=0.0)
+    duration_seconds: float = Field(ge=0.0)
+    total_tokens: int = Field(ge=0)
+    generated_at: str

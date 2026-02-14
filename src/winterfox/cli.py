@@ -4,19 +4,21 @@ Winterfox CLI - Command-line interface for autonomous research.
 Commands:
 - init: Initialize a new research project
 - run: Run research cycle(s)
+- report: Generate narrative research report from knowledge graph
 - status: Show graph summary
 - show: Display specific node
 - export: Export knowledge graph
-- view-cycle: View detailed cycle output
-- list-cycles: List and filter past cycles
-- export-cycles: Export multiple cycles to report
+- cycle list: List and filter past cycles
+- cycle view: View detailed cycle output
+- cycle export: Export multiple cycles to report
+- cycle remove: Delete a cycle by ID
 - interactive: Run in interactive mode
 - serve: Launch web dashboard
 """
 
 import asyncio
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 from rich.console import Console
@@ -35,6 +37,13 @@ app = typer.Typer(
 )
 
 console = Console()
+
+cycle_app = typer.Typer(
+    name="cycle",
+    help="Manage research cycles (list, view, export, remove)",
+    no_args_is_help=True,
+)
+app.add_typer(cycle_app)
 
 
 @app.command()
@@ -608,6 +617,7 @@ def run(
     config: Path = typer.Option(Path("winterfox.toml"), "--config", "-c", help="Config file path"),
     log_level: str = typer.Option("INFO", "--log-level", "-l", help="Log level"),
     no_consensus: bool = typer.Option(False, "--no-consensus", help="Disable multi-agent consensus"),
+    report: bool = typer.Option(False, "--report", help="Generate a report after cycles complete"),
 ) -> None:
     """
     Run research cycles.
@@ -623,11 +633,12 @@ def run(
         winterfox run                    # Run 1 cycle
         winterfox run -n 10              # Run 10 cycles
         winterfox run --focus node-123   # Research specific node
+        winterfox run -n 5 --report      # Run 5 cycles, then generate report
     """
     setup_logging(level=log_level)
 
     try:
-        asyncio.run(_run_cycles(config, n, focus, not no_consensus))
+        asyncio.run(_run_cycles(config, n, focus, not no_consensus, report))
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted by user[/yellow]")
         raise typer.Exit(0)
@@ -641,6 +652,7 @@ async def _run_cycles(
     n: int,
     focus_node_id: Optional[str],
     use_consensus: bool,
+    generate_report: bool = False,
 ) -> None:
     """Run research cycles."""
     # Load configuration
@@ -713,26 +725,20 @@ async def _run_cycles(
         adapters.append(adapter)
 
     # Pre-flight: verify all agent API keys before starting research
-    verified_adapters = []
     for adapter in adapters:
         try:
             await adapter.verify()
-            verified_adapters.append(adapter)
             console.print(f"[green]✓[/green] {adapter.name}: API key verified")
         except AgentAuthenticationError as e:
             console.print(f"[red]✗[/red] {adapter.name}: {e}")
+            await graph.close()
+            raise typer.Exit(1)
         except Exception as e:
-            console.print(f"[yellow]![/yellow] {adapter.name}: verification failed ({e}), skipping")
+            console.print(f"[red]✗[/red] {adapter.name}: verification failed ({e})")
+            await graph.close()
+            raise typer.Exit(1)
 
-    if not verified_adapters:
-        console.print("\n[red]Error: No agents passed API key verification. Check your API keys.[/red]")
-        await graph.close()
-        raise typer.Exit(1)
-
-    if len(verified_adapters) < len(adapters):
-        console.print(
-            f"\n[yellow]Continuing with {len(verified_adapters)}/{len(adapters)} agent(s)[/yellow]"
-        )
+    verified_adapters = adapters
 
     # Determine primary agent index among verified adapters
     primary_agent_index = 0
@@ -858,7 +864,178 @@ async def _run_cycles(
     summary = await render_summary_view(graph, max_depth=3)
     console.print(summary)
 
+    # Generate report if requested
+    if generate_report:
+        north_star = config.get_north_star(config_path.parent)
+        primary_adapter = verified_adapters[primary_agent_index]
+        await _generate_and_save_report(graph, primary_adapter, north_star, config_path)
+
     await graph.close()
+
+
+@app.command()
+def report(
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file path (default: .winterfox/report.md)"),
+    config: Path = typer.Option(Path("winterfox.toml"), "--config", "-c", help="Config file path"),
+    no_save: bool = typer.Option(False, "--no-save", help="Print only, don't save to file"),
+    no_print: bool = typer.Option(False, "--no-print", help="Save only, don't print to console"),
+    log_level: str = typer.Option("INFO", "--log-level", "-l", help="Log level"),
+) -> None:
+    """
+    Generate a narrative research report from the knowledge graph.
+
+    Uses the primary LLM to synthesize all findings into a cohesive
+    document organized by themes, with confidence labels and citations.
+
+    Example:
+        winterfox report                        # Save to .winterfox/report.md and print
+        winterfox report --output report.md     # Custom output path
+        winterfox report --no-save              # Print only
+        winterfox report --no-print             # Save only
+    """
+    setup_logging(level=log_level)
+
+    try:
+        asyncio.run(_generate_report(config, output, no_save, no_print))
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted by user[/yellow]")
+        raise typer.Exit(0)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+
+async def _generate_report(
+    config_path: Path,
+    output_path: Path | None,
+    no_save: bool,
+    no_print: bool,
+) -> None:
+    """Generate a narrative research report."""
+    from .agents.adapters.anthropic import AnthropicAdapter
+    from .agents.adapters.base import AgentAuthenticationError
+    from .agents.adapters.kimi import KimiAdapter
+    from .agents.adapters.openrouter import OpenRouterAdapter
+    from .graph.store import KnowledgeGraph
+    from .orchestrator.report import ReportSynthesizer
+
+    config = load_config(config_path)
+
+    graph = KnowledgeGraph(
+        str(config.storage.db_path),
+        workspace_id=config.multi_tenancy.workspace_id,
+    )
+    await graph.initialize()
+
+    try:
+        # Find the primary agent config
+        primary_config = None
+        for agent_config in config.agents:
+            if agent_config.role == "primary":
+                primary_config = agent_config
+                break
+        if primary_config is None:
+            primary_config = config.agents[0]
+
+        # Initialize only the primary adapter
+        api_keys = config.get_agent_api_keys()
+        key = f"{primary_config.provider}:{primary_config.model}"
+        api_key = api_keys.get(key, "")
+
+        if primary_config.provider == "anthropic":
+            adapter = AnthropicAdapter(
+                model=primary_config.model,
+                api_key=api_key if not primary_config.use_subscription else None,
+                use_subscription=primary_config.use_subscription,
+                timeout=primary_config.timeout_seconds,
+            )
+        elif primary_config.provider == "moonshot":
+            adapter = KimiAdapter(
+                model=primary_config.model,
+                api_key=api_key,
+                timeout=primary_config.timeout_seconds,
+            )
+        elif primary_config.provider == "openrouter":
+            adapter = OpenRouterAdapter(
+                model=primary_config.model,
+                api_key=api_key,
+                timeout=primary_config.timeout_seconds,
+                supports_native_search=primary_config.supports_native_search,
+            )
+        else:
+            console.print(f"[red]Error: Unsupported provider {primary_config.provider}[/red]")
+            return
+
+        # Verify API key
+        try:
+            await adapter.verify()
+            console.print(f"[green]\u2713[/green] {adapter.name}: API key verified")
+        except AgentAuthenticationError as e:
+            console.print(f"[red]\u2717[/red] {adapter.name}: {e}")
+            return
+
+        north_star = config.get_north_star(config_path.parent)
+        await _generate_and_save_report(
+            graph, adapter, north_star, config_path, output_path, no_save, no_print,
+        )
+    finally:
+        await graph.close()
+
+
+async def _generate_and_save_report(
+    graph: Any,
+    adapter: Any,
+    north_star: str,
+    config_path: Path,
+    output_path: Path | None = None,
+    no_save: bool = False,
+    no_print: bool = False,
+) -> None:
+    """Generate report and handle saving/printing.
+
+    Shared between `winterfox report` and `winterfox run --report`.
+    """
+    from .orchestrator.report import ReportSynthesizer
+
+    synthesizer = ReportSynthesizer(graph, adapter, north_star)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Generating report...", total=None)
+
+        try:
+            result = synthesizer.generate()
+            # Handle both sync and async
+            if asyncio.iscoroutine(result):
+                result = await result
+        except ValueError as e:
+            console.print(f"[red]Error:[/red] {e}")
+            return
+
+        progress.update(task, description="Report complete")
+
+    # Determine output path
+    if not no_save:
+        if output_path is None:
+            output_path = config_path.parent / ".winterfox" / "report.md"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(result.markdown, encoding="utf-8")
+        console.print(f"[green]\u2713[/green] Report saved to {output_path}")
+
+    # Print to console
+    if not no_print:
+        console.print()
+        console.print(result.markdown)
+
+    # Cost summary
+    console.print(
+        f"\n[dim]Report: {result.node_count} nodes, {result.cycle_count} cycles | "
+        f"${result.cost_usd:.4f} | {result.duration_seconds:.1f}s | "
+        f"{result.total_tokens:,} tokens[/dim]"
+    )
 
 
 @app.command()
@@ -1108,8 +1285,8 @@ async def _interactive_mode(config_path: Path) -> None:
         # else continue (default)
 
 
-@app.command()
-def view_cycle(
+@cycle_app.command("view")
+def cycle_view(
     cycle_id: int = typer.Argument(..., help="Cycle ID to view"),
     config: Path = typer.Option(Path("winterfox.toml"), "--config", "-c"),
     format: str = typer.Option("markdown", "--format", "-f", help="Format: markdown or summary"),
@@ -1119,9 +1296,9 @@ def view_cycle(
     View detailed output from a specific cycle.
 
     Examples:
-        winterfox view-cycle 15
-        winterfox view-cycle 15 --save cycle_015.md
-        winterfox view-cycle 15 --format summary
+        winterfox cycle view 15
+        winterfox cycle view 15 --save cycle_015.md
+        winterfox cycle view 15 --format summary
     """
     setup_logging()
 
@@ -1186,8 +1363,8 @@ async def _view_cycle_output(
         await graph.close()
 
 
-@app.command()
-def list_cycles(
+@cycle_app.command("list")
+def cycle_list(
     config: Path = typer.Option(Path("winterfox.toml"), "--config", "-c"),
     limit: int = typer.Option(20, "--limit", "-n", help="Number of cycles to show"),
     node: Optional[str] = typer.Option(None, "--node", help="Filter by target node ID"),
@@ -1200,11 +1377,11 @@ def list_cycles(
     List past research cycles with filtering.
 
     Examples:
-        winterfox list-cycles
-        winterfox list-cycles --limit 10
-        winterfox list-cycles --node abc123
-        winterfox list-cycles --min-cost 0.10 --max-cost 1.00
-        winterfox list-cycles --search "legal tech"
+        winterfox cycle list
+        winterfox cycle list --limit 10
+        winterfox cycle list --node abc123
+        winterfox cycle list --min-cost 0.10 --max-cost 1.00
+        winterfox cycle list --search "legal tech"
     """
     setup_logging()
 
@@ -1252,12 +1429,34 @@ async def _list_cycle_outputs(
             )
 
         if not cycles:
-            console.print("[yellow]No cycles found[/yellow]")
+            # Fall back: discover cycles from nodes table
+            node_cycles = await graph.list_cycles_from_nodes(
+                workspace_id=config.multi_tenancy.workspace_id,
+                limit=limit,
+            )
+            if not node_cycles:
+                console.print("[yellow]No cycles found[/yellow]")
+                return
+
+            table = Table(title=f"Research Cycles ({len(node_cycles)} from graph nodes)")
+            table.add_column("Cycle", style="cyan", width=6)
+            table.add_column("Nodes", style="green", width=8)
+            table.add_column("Date", style="white", width=19)
+
+            for nc in node_cycles:
+                table.add_row(
+                    str(nc["cycle_id"]),
+                    str(nc["node_count"]),
+                    nc["first_created"][:19],
+                )
+
+            console.print(table)
+            console.print(f"\n[dim]These cycles have no stored output data (pre-dating cycle output tracking).[/dim]")
             return
 
         # Display table
         table = Table(title=f"Research Cycles ({len(cycles)} results)")
-        table.add_column("ID", style="cyan", width=6)
+        table.add_column("Cycle", style="cyan", width=6)
         table.add_column("Date", style="white", width=19)
         table.add_column("Claim", style="white", width=50)
         table.add_column("Status", style="white", width=8)
@@ -1281,14 +1480,95 @@ async def _list_cycle_outputs(
             )
 
         console.print(table)
-        console.print(f"\n[dim]Use 'winterfox view-cycle <id>' to see details[/dim]")
+        console.print(f"\n[dim]Use 'winterfox cycle view <id>' to see details[/dim]")
 
     finally:
         await graph.close()
 
 
-@app.command()
-def export_cycles(
+@cycle_app.command("remove")
+def cycle_remove(
+    cycle_id: int = typer.Argument(..., help="Cycle ID to delete"),
+    config: Path = typer.Option(Path("winterfox.toml"), "--config", "-c"),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
+) -> None:
+    """
+    Delete a cycle and its associated data.
+
+    Removes cycle output, agent outputs, and graph operations for the cycle.
+    Does NOT remove knowledge graph nodes created by the cycle.
+
+    Examples:
+        winterfox cycle remove 15
+        winterfox cycle remove 15 --force
+    """
+    setup_logging()
+
+    try:
+        asyncio.run(_remove_cycle(config, cycle_id, force))
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+
+async def _remove_cycle(config_path: Path, cycle_id: int, force: bool) -> None:
+    """Delete a cycle by ID (database records + raw output files)."""
+    import glob as globmod
+
+    from .graph.store import KnowledgeGraph
+
+    config = load_config(config_path)
+    workspace_id = config.multi_tenancy.workspace_id
+    graph = KnowledgeGraph(str(config.storage.db_path), workspace_id=workspace_id)
+    await graph.initialize()
+
+    try:
+        if not force:
+            # Try cycle_outputs first for rich info
+            cycle = await graph.get_cycle_output(cycle_id)
+            if cycle:
+                console.print(
+                    f"Cycle [bold]{cycle_id}[/bold]: {cycle['target_claim'][:80]}\n"
+                    f"  Cost: ${cycle['total_cost_usd']:.4f} | "
+                    f"Findings: +{cycle['findings_created']} ~{cycle['findings_updated']} | "
+                    f"Date: {cycle['created_at'][:19]}"
+                )
+            else:
+                # Fall back to nodes table
+                node_cycles = await graph.list_cycles_from_nodes(workspace_id, limit=1000)
+                found = next((c for c in node_cycles if c["cycle_id"] == cycle_id), None)
+                if not found:
+                    console.print(f"[red]Cycle {cycle_id} not found[/red]")
+                    return
+                console.print(
+                    f"Cycle [bold]{cycle_id}[/bold]: {found['node_count']} nodes | "
+                    f"Date: {found['first_created'][:19]}"
+                )
+
+            if not typer.confirm("Delete this cycle?"):
+                console.print("[yellow]Cancelled[/yellow]")
+                return
+
+        # Delete from database (cycle_outputs, graph_operations, nodes)
+        deleted = await graph.delete_cycle(workspace_id=workspace_id, cycle_id=cycle_id)
+
+        # Delete raw output files: raw/{YYYY-MM-DD}/cycle_{id}.md
+        raw_dir = config_path.parent / config.storage.raw_output_dir
+        raw_files = globmod.glob(str(raw_dir / "**" / f"cycle_{cycle_id}.md"), recursive=True)
+        for f in raw_files:
+            Path(f).unlink()
+            console.print(f"[dim]Deleted {f}[/dim]")
+
+        if deleted or raw_files:
+            console.print(f"[green]✓[/green] Deleted cycle {cycle_id}")
+        else:
+            console.print(f"[red]Cycle {cycle_id} not found[/red]")
+    finally:
+        await graph.close()
+
+
+@cycle_app.command("export")
+def cycle_export(
     output: Path = typer.Argument(..., help="Output file path"),
     config: Path = typer.Option(Path("winterfox.toml"), "--config", "-c"),
     cycles: Optional[str] = typer.Option(None, "--cycles", help="Cycle range (e.g., '1-10' or '5,7,9')"),
@@ -1300,9 +1580,9 @@ def export_cycles(
     Export multiple cycles to a combined report.
 
     Examples:
-        winterfox export-cycles report.md --cycles "1-10"
-        winterfox export-cycles report.md --cycles "5,7,9,12"
-        winterfox export-cycles report.md --node abc123
+        winterfox cycle export report.md --cycles "1-10"
+        winterfox cycle export report.md --cycles "5,7,9,12"
+        winterfox cycle export report.md --node abc123
     """
     setup_logging()
 

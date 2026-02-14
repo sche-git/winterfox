@@ -3,7 +3,7 @@
  */
 
 import React from 'react';
-import { BarChart3, GitFork, History, Wifi } from 'lucide-react';
+import { BarChart3, FileText, GitFork, History, Wifi } from 'lucide-react';
 import { useUIStore, type Page } from '../../stores/uiStore';
 import { useCycleStore } from '../../stores/cycleStore';
 import { cn } from '@/lib/utils';
@@ -12,6 +12,7 @@ const navItems: { page: Page; label: string; icon: React.ElementType }[] = [
   { page: 'overview', label: 'Overview', icon: BarChart3 },
   { page: 'graph', label: 'Knowledge Graph', icon: GitFork },
   { page: 'history', label: 'Research Cycles', icon: History },
+  { page: 'report', label: 'Report', icon: FileText },
 ];
 
 const Sidebar: React.FC = () => {

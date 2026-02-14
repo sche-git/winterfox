@@ -199,6 +199,7 @@ SCHEMA_STATEMENTS = [
         input_tokens INTEGER NOT NULL,
         output_tokens INTEGER NOT NULL,
         duration_seconds REAL NOT NULL,
+        raw_text TEXT NOT NULL DEFAULT '',
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (cycle_output_id) REFERENCES cycle_outputs(id) ON DELETE CASCADE
     )
@@ -280,6 +281,18 @@ class KnowledgeGraph:
             # Execute each schema statement
             for statement in SCHEMA_STATEMENTS:
                 await db.execute(statement.strip())
+
+            # Migrate existing tables: add columns that may be missing
+            migrations = [
+                "ALTER TABLE cycle_outputs ADD COLUMN selection_strategy TEXT",
+                "ALTER TABLE cycle_outputs ADD COLUMN selection_reasoning TEXT",
+                "ALTER TABLE agent_outputs ADD COLUMN raw_text TEXT NOT NULL DEFAULT ''",
+            ]
+            for migration in migrations:
+                try:
+                    await db.execute(migration)
+                except Exception:
+                    pass  # Column already exists
 
             await db.commit()
 
@@ -741,8 +754,8 @@ class KnowledgeGraph:
                         cycle_output_id, agent_name, agent_model, role,
                         findings, self_critique, searches_performed,
                         cost_usd, total_tokens, input_tokens, output_tokens,
-                        duration_seconds
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        duration_seconds, raw_text
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         cycle_output_id,
@@ -757,6 +770,7 @@ class KnowledgeGraph:
                         output.input_tokens,
                         output.output_tokens,
                         output.duration_seconds,
+                        output.raw_text,
                     ),
                 )
 
@@ -867,7 +881,7 @@ class KnowledgeGraph:
                 SELECT
                     agent_name, agent_model, role, findings, self_critique,
                     searches_performed, cost_usd, total_tokens, input_tokens,
-                    output_tokens, duration_seconds
+                    output_tokens, duration_seconds, raw_text
                 FROM agent_outputs
                 WHERE cycle_output_id = ?
                 ORDER BY id
@@ -890,6 +904,7 @@ class KnowledgeGraph:
                     "input_tokens": agent_row[8],
                     "output_tokens": agent_row[9],
                     "duration_seconds": agent_row[10],
+                    "raw_text": agent_row[11] if agent_row[11] else "",
                 }
                 agent_outputs.append(agent_data)
 
@@ -1139,6 +1154,107 @@ class KnowledgeGraph:
             }
             for row in rows
         ]
+
+    async def list_cycles_from_nodes(
+        self,
+        workspace_id: str,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """
+        Discover cycles from the nodes table.
+
+        Useful when cycle_outputs is empty but nodes reference cycles
+        via created_by_cycle.
+
+        Args:
+            workspace_id: Workspace ID
+            limit: Maximum results
+
+        Returns:
+            List of dicts with cycle_id, node_count, earliest/latest dates
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        async with self._get_db() as db:
+            cursor = await db.execute(
+                """
+                SELECT
+                    created_by_cycle,
+                    COUNT(*) as node_count,
+                    MIN(created_at) as first_created,
+                    MAX(created_at) as last_created
+                FROM nodes
+                WHERE workspace_id = ? AND created_by_cycle >= 0
+                GROUP BY created_by_cycle
+                ORDER BY created_by_cycle DESC
+                LIMIT ?
+                """,
+                (workspace_id, limit),
+            )
+            rows = await cursor.fetchall()
+
+        return [
+            {
+                "cycle_id": row[0],
+                "node_count": row[1],
+                "first_created": row[2],
+                "last_created": row[3],
+            }
+            for row in rows
+        ]
+
+    async def delete_cycle(
+        self,
+        workspace_id: str,
+        cycle_id: int,
+    ) -> bool:
+        """
+        Delete all data associated with a cycle.
+
+        Cleans up:
+        - cycle_outputs + agent_outputs (CASCADE) + FTS (trigger)
+        - graph_operations for this cycle
+        - nodes created by this cycle
+
+        Returns True if anything was deleted, False if cycle not found.
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        deleted_anything = False
+
+        async with self._get_db() as db:
+            # Delete from cycle_outputs (CASCADE deletes agent_outputs,
+            # trigger cleans cycle_outputs_fts)
+            await db.execute(
+                "DELETE FROM cycle_outputs WHERE cycle_id = ? AND workspace_id = ?",
+                (cycle_id, workspace_id),
+            )
+            if db.total_changes > 0:
+                deleted_anything = True
+
+            # Clean up graph_operations
+            await db.execute(
+                "DELETE FROM graph_operations WHERE cycle_id = ? AND workspace_id = ?",
+                (cycle_id, workspace_id),
+            )
+            if db.total_changes > 0:
+                deleted_anything = True
+
+            # Delete nodes created by this cycle
+            await db.execute(
+                "DELETE FROM nodes WHERE created_by_cycle = ? AND workspace_id = ?",
+                (cycle_id, workspace_id),
+            )
+            if db.total_changes > 0:
+                deleted_anything = True
+
+            await db.commit()
+
+        if deleted_anything:
+            logger.info(f"Deleted cycle {cycle_id} from workspace {workspace_id}")
+        return deleted_anything
 
     async def delete_old_cycle_outputs(
         self,

@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import api
 from .api import config as config_api
-from .api import cycles, graph, stats
+from .api import cycles, graph, report, stats
 from .websocket import get_connection_manager
 
 logger = logging.getLogger(__name__)
@@ -90,6 +90,7 @@ def create_app(
     app.include_router(cycles.router, prefix="/api/cycles", tags=["cycles"])
     app.include_router(stats.router, prefix="/api/stats", tags=["stats"])
     app.include_router(config_api.router, prefix="/api/config", tags=["config"])
+    app.include_router(report.router, prefix="/api/report", tags=["report"])
 
     # WebSocket endpoint for real-time events
     @app.websocket("/ws/events")

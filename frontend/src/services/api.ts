@@ -15,6 +15,7 @@ import type {
   OverviewStats,
   TimelineResponse,
   Config,
+  Report,
 } from '../types/api';
 
 class WinterfoxAPI {
@@ -108,6 +109,25 @@ class WinterfoxAPI {
   async getConfig(): Promise<Config> {
     const response = await this.client.get<Config>('/api/config');
     return response.data;
+  }
+
+  // Report endpoints
+
+  async generateReport(): Promise<Report> {
+    const response = await this.client.post<Report>('/api/report/generate', {}, {
+      timeout: 120000,
+    });
+    return response.data;
+  }
+
+  async getLatestReport(): Promise<Report | null> {
+    try {
+      const response = await this.client.get<Report>('/api/report/latest');
+      return response.data;
+    } catch (err: any) {
+      if (err.response?.status === 404) return null;
+      throw err;
+    }
   }
 }
 

@@ -22,6 +22,8 @@ export interface Node {
   evidence: Evidence[];
   status: 'active' | 'archived' | 'merged';
   node_type: 'question' | 'hypothesis' | 'supporting' | 'opposing' | null;
+  created_by_cycle: number;
+  updated_by_cycle: number;
   created_at: string;
   updated_at: string;
 }
@@ -119,6 +121,7 @@ export interface AgentOutputSummary {
   searches_performed: number;
   findings_count: number;
   self_critique: string;
+  raw_text: string;
   findings: AgentFinding[];
   searches: AgentSearchRecord[];
 }
@@ -226,6 +229,19 @@ export interface Config {
   workspace_id: string;
   agents: AgentConfig[];
   search_providers: SearchProvider[];
+}
+
+// Report types
+
+export interface Report {
+  markdown: string;
+  node_count: number;
+  cycle_count: number;
+  avg_confidence: number;
+  cost_usd: number;
+  duration_seconds: number;
+  total_tokens: number;
+  generated_at: string;
 }
 
 // WebSocket event types

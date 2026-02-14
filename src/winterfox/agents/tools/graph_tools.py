@@ -178,7 +178,7 @@ def create_note_finding_tool() -> "ToolDefinition":
                     "description": "Type of finding: hypothesis (proposed answer), supporting (evidence for), opposing (evidence against)",
                 },
             },
-            "required": ["claim", "confidence", "evidence"],
+            "required": ["claim", "confidence", "evidence", "finding_type"],
         },
         execute=lambda claim, confidence, evidence, finding_type=None: note_finding(
             claim, confidence, evidence, finding_type=finding_type

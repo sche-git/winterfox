@@ -79,6 +79,7 @@ const CycleDetailSheet: React.FC<CycleDetailSheetProps> = ({ cycleId, onClose })
               <TabsTrigger value="synthesis" className="text-xs">Synthesis</TabsTrigger>
               <TabsTrigger value="agents" className="text-xs">Agents</TabsTrigger>
               <TabsTrigger value="searches" className="text-xs">Searches</TabsTrigger>
+              <TabsTrigger value="raw" className="text-xs">Raw Output</TabsTrigger>
             </TabsList>
           </div>
 
@@ -242,6 +243,44 @@ const CycleDetailSheet: React.FC<CycleDetailSheetProps> = ({ cycleId, onClose })
                   <Search className="mx-auto h-8 w-8 text-muted-foreground" />
                   <p className="mt-3 text-sm text-muted-foreground">
                     No search records available
+                  </p>
+                </div>
+              )}
+            </div>
+          </TabsContent>
+
+          {/* Raw Output Tab */}
+          <TabsContent value="raw" className="m-0 overflow-auto flex-1">
+            <div className="p-6 space-y-4">
+              {detail.agent_outputs.some((a) => a.raw_text) ? (
+                detail.agent_outputs.map((agent, i) => (
+                  <div key={i} className="rounded-md border">
+                    <div className="flex items-center gap-2 border-b px-4 py-2.5">
+                      <Bot className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-sm font-medium">{agent.agent_name}</span>
+                      {agent.role === 'primary' && (
+                        <Badge variant="outline" className="text-[10px] py-0">primary</Badge>
+                      )}
+                    </div>
+                    {agent.raw_text ? (
+                      <div className="max-h-[600px] overflow-auto p-4">
+                        <MarkdownContent content={agent.raw_text} />
+                      </div>
+                    ) : (
+                      <p className="p-4 text-xs text-muted-foreground">
+                        No raw output available for this agent.
+                      </p>
+                    )}
+                  </div>
+                ))
+              ) : (
+                <div className="text-center py-8">
+                  <MessageSquare className="mx-auto h-8 w-8 text-muted-foreground" />
+                  <p className="mt-3 text-sm text-muted-foreground">
+                    No raw output recorded
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Raw output is available for cycles run after this feature was added.
                   </p>
                 </div>
               )}

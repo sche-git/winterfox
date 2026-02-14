@@ -4,7 +4,7 @@
 
 import { create } from 'zustand';
 
-export type Page = 'overview' | 'graph' | 'history';
+export type Page = 'overview' | 'graph' | 'history' | 'report';
 
 interface UIState {
   // State

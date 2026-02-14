@@ -6,7 +6,7 @@
 import React, { useState } from 'react';
 import { ChevronRight, ChevronDown, Circle } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { getNodeTypeConfig } from '@/lib/nodeTypes';
+import { getNodeTypeConfig, parseClaimType } from '@/lib/nodeTypes';
 import type { NodeTreeItem } from '../../types/api';
 
 interface TreeNodeProps {
@@ -32,7 +32,8 @@ const TreeNode: React.FC<TreeNodeProps> = ({
   const isSelected = selectedId === node.id;
   const confidencePct = Math.round(node.confidence * 100);
   const importancePct = Math.round(node.importance * 100);
-  const typeConfig = getNodeTypeConfig(node.node_type);
+  const parsed = parseClaimType(node.claim, node.node_type);
+  const typeConfig = getNodeTypeConfig(parsed.nodeType);
 
   const handleRowClick = () => {
     onSelect(node.id);
@@ -122,7 +123,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
 
         {/* Claim text */}
         <span className="ml-1.5 min-w-0 flex-1 truncate text-xs">
-          {node.claim}
+          {parsed.claim}
         </span>
 
         {/* Confidence percentage */}

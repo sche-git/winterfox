@@ -91,6 +91,8 @@ class GraphService:
             ],
             status=api_status,
             node_type=node.node_type,
+            created_by_cycle=node.created_by_cycle,
+            updated_by_cycle=node.updated_by_cycle,
             created_at=node.created_at,
             updated_at=node.updated_at,
         )
@@ -430,6 +432,7 @@ class GraphService:
                     searches_performed=len(raw_searches),
                     findings_count=len(raw_findings),
                     self_critique=agent.get("self_critique", ""),
+                    raw_text=agent.get("raw_text", ""),
                     findings=findings,
                     searches=searches,
                 )

@@ -106,10 +106,17 @@ def get_research_tools(graph: "KnowledgeGraph") -> list["ToolDefinition"]:
                             "required": ["text", "source"],
                         },
                     },
+                    "finding_type": {
+                        "type": "string",
+                        "enum": ["hypothesis", "supporting", "opposing"],
+                        "description": "Type of finding: hypothesis (proposed answer), supporting (evidence for), opposing (evidence against)",
+                    },
                 },
                 "required": ["claim", "confidence", "evidence"],
             },
-            execute=lambda claim, confidence, evidence: note_finding(claim, confidence, evidence),
+            execute=lambda claim, confidence, evidence, finding_type=None: note_finding(
+                claim, confidence, evidence, finding_type=finding_type
+            ),
         ),
     ]
 
