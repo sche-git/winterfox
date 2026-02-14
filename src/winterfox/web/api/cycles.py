@@ -15,21 +15,38 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from ..models.api_models import (
     ActiveCycleResponse,
     CycleDetailResponse,
-    CycleResponse,
     CyclesListResponse,
 )
+from ..services.graph_service import GraphService
+from .graph import get_graph_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["cycles"])
 
 
-# TODO: Implement CycleService in Phase 2
-# For Phase 1, provide stub responses
+@router.get("/active", response_model=ActiveCycleResponse)
+async def get_active_cycle() -> ActiveCycleResponse:
+    """
+    Get currently running cycle status.
+
+    Returns:
+        Active cycle information or idle status
+    """
+    # Active cycle tracking is done via WebSocket events in real-time.
+    # This endpoint reports idle since cycles are driven by CLI.
+    return ActiveCycleResponse(
+        cycle_id=None,
+        status="idle",
+        focus_node_id=None,
+        current_step=None,
+        progress_percent=0,
+    )
 
 
 @router.get("", response_model=CyclesListResponse)
 async def get_cycles(
+    service: Annotated[GraphService, Depends(get_graph_service)],
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> CyclesListResponse:
@@ -43,14 +60,18 @@ async def get_cycles(
     Returns:
         List of cycles with metadata
     """
-    # TODO: Implement actual cycle history retrieval
-    # For Phase 1, return empty list
-    logger.warning("Cycles endpoint not yet implemented (Phase 1)")
-    return CyclesListResponse(cycles=[], total=0)
+    try:
+        return await service.get_cycles(limit=limit, offset=offset)
+    except Exception as e:
+        logger.error(f"Failed to get cycles: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{cycle_id}", response_model=CycleDetailResponse)
-async def get_cycle(cycle_id: int) -> CycleDetailResponse:
+async def get_cycle(
+    cycle_id: int,
+    service: Annotated[GraphService, Depends(get_graph_service)],
+) -> CycleDetailResponse:
     """
     Get detailed information for a single cycle.
 
@@ -63,27 +84,13 @@ async def get_cycle(cycle_id: int) -> CycleDetailResponse:
     Raises:
         404: Cycle not found
     """
-    # TODO: Implement actual cycle detail retrieval
-    # For Phase 1, return 404
-    logger.warning(f"Cycle detail endpoint not yet implemented (Phase 1): {cycle_id}")
-    raise HTTPException(status_code=404, detail="Cycle details not yet implemented")
-
-
-@router.get("/active", response_model=ActiveCycleResponse)
-async def get_active_cycle() -> ActiveCycleResponse:
-    """
-    Get currently running cycle status.
-
-    Returns:
-        Active cycle information or idle status
-    """
-    # TODO: Implement actual active cycle tracking
-    # For Phase 1, always return idle
-    logger.debug("Active cycle check (always idle in Phase 1)")
-    return ActiveCycleResponse(
-        cycle_id=None,
-        status="idle",
-        focus_node_id=None,
-        current_step=None,
-        progress_percent=0,
-    )
+    try:
+        detail = await service.get_cycle_detail(cycle_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail=f"Cycle not found: {cycle_id}")
+        return detail
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get cycle {cycle_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))

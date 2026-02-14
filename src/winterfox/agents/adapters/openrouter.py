@@ -3,10 +3,17 @@ OpenRouter adapter for winterfox.
 
 OpenRouter provides unified access to many LLM models through a single API.
 Uses OpenAI-compatible API format.
+
+Because OpenRouter proxies many different model providers, tool call response
+formats vary significantly. This adapter normalizes all known variations into
+a canonical format before processing.
 """
 
-import asyncio
+import json
 import logging
+import re
+import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -24,12 +31,163 @@ from .base import AgentAuthenticationError
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Tool call normalization
+# ---------------------------------------------------------------------------
+
+@dataclass
+class NormalizedToolCall:
+    """Canonical representation of a tool call, regardless of source model."""
+
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+def _generate_tool_call_id() -> str:
+    """Generate a synthetic tool call ID when the model doesn't provide one."""
+    return f"call_{uuid.uuid4().hex[:24]}"
+
+
+def _parse_arguments(raw: Any) -> dict[str, Any]:
+    """
+    Parse tool call arguments from any format models might return.
+
+    Handles:
+    - JSON string (OpenAI standard): '{"query": "test"}'
+    - Dict (Anthropic/Gemini leak-through): {"query": "test"}
+    - Empty string: ""
+    - None / missing
+    - Malformed JSON with trailing commas, etc.
+    """
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        if not stripped:
+            return {}
+        try:
+            parsed = json.loads(stripped)
+            if isinstance(parsed, dict):
+                return parsed
+            return {}
+        except json.JSONDecodeError:
+            # Some models produce trailing commas or single quotes — try
+            # cleaning common mistakes before giving up.
+            cleaned = stripped.rstrip(",").rstrip()
+            try:
+                parsed = json.loads(cleaned)
+                return parsed if isinstance(parsed, dict) else {}
+            except json.JSONDecodeError:
+                logger.warning(f"Unparseable tool arguments: {stripped[:200]}")
+                return {}
+    return {}
+
+
+def normalize_tool_calls(message: dict[str, Any]) -> list[NormalizedToolCall]:
+    """
+    Extract tool calls from an assistant message, handling all known formats.
+
+    1. Standard OpenAI tool_calls array
+    2. Tool calls embedded in content text (Hermes/Qwen <tool_call>, Mistral
+       [TOOL_CALLS], Llama <|python_tag|>)
+    """
+    results: list[NormalizedToolCall] = []
+
+    # --- Path 1: Standard tool_calls array ---
+    raw_tool_calls = message.get("tool_calls") or []
+    for tc in raw_tool_calls:
+        func = tc.get("function") or {}
+        name = func.get("name")
+        if not name:
+            # Some models put name at top level
+            name = tc.get("name")
+        if not name:
+            logger.warning(f"Skipping tool call with no function name: {tc}")
+            continue
+
+        results.append(
+            NormalizedToolCall(
+                id=tc.get("id") or _generate_tool_call_id(),
+                name=name,
+                arguments=_parse_arguments(func.get("arguments")),
+            )
+        )
+
+    # --- Path 2: Tool calls embedded in content (provider parser failures) ---
+    if not results:
+        content = message.get("content") or ""
+        if isinstance(content, str):
+            results.extend(_extract_tool_calls_from_content(content))
+
+    return results
+
+
+def _extract_tool_calls_from_content(content: str) -> list[NormalizedToolCall]:
+    """
+    Fallback parser for tool calls dumped as raw text in the content field.
+
+    This happens when the upstream provider's tool parser fails, especially
+    with open-source models in streaming mode.
+    """
+    results: list[NormalizedToolCall] = []
+
+    # --- Hermes / Qwen format: <tool_call>{"name": "...", "arguments": {...}}</tool_call> ---
+    hermes_pattern = r"<tool_call>\s*(\{.*?\})\s*</tool_call>"
+    for match in re.finditer(hermes_pattern, content, re.DOTALL):
+        try:
+            tc = json.loads(match.group(1))
+            name = tc.get("name")
+            if name:
+                results.append(
+                    NormalizedToolCall(
+                        id=_generate_tool_call_id(),
+                        name=name,
+                        arguments=_parse_arguments(tc.get("arguments")),
+                    )
+                )
+        except json.JSONDecodeError:
+            logger.debug(f"Failed to parse Hermes tool_call: {match.group(1)[:200]}")
+
+    if results:
+        return results
+
+    # --- Mistral format: [TOOL_CALLS] [{"name": "...", "arguments": {...}}] ---
+    if "[TOOL_CALLS]" in content:
+        tc_match = re.search(r"\[TOOL_CALLS\]\s*(\[.*\])", content, re.DOTALL)
+        if tc_match:
+            try:
+                calls = json.loads(tc_match.group(1))
+                for tc in calls:
+                    name = tc.get("name")
+                    if name:
+                        results.append(
+                            NormalizedToolCall(
+                                id=_generate_tool_call_id(),
+                                name=name,
+                                arguments=_parse_arguments(tc.get("arguments")),
+                            )
+                        )
+            except json.JSONDecodeError:
+                logger.debug(f"Failed to parse Mistral tool calls: {tc_match.group(1)[:200]}")
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Adapter
+# ---------------------------------------------------------------------------
+
 class OpenRouterAdapter:
     """
     Adapter for OpenRouter API.
 
-    OpenRouter provides access to many models (Claude, GPT-4, Llama, etc.)
-    through a unified OpenAI-compatible API.
+    OpenRouter provides access to many models (Claude, GPT-4, Llama, Qwen, etc.)
+    through a unified OpenAI-compatible API. Because responses come from many
+    different providers and model families, this adapter normalizes tool call
+    formats before processing.
     """
 
     def __init__(
@@ -39,32 +197,19 @@ class OpenRouterAdapter:
         timeout: int = 300,
         supports_native_search: bool = False,
     ):
-        """
-        Initialize OpenRouter adapter.
-
-        Args:
-            model: Model identifier (e.g., "anthropic/claude-opus-4")
-            api_key: OpenRouter API key
-            timeout: Request timeout in seconds
-            supports_native_search: Whether model supports native search
-        """
         self.model = model
         self.api_key = api_key
         self.timeout = timeout
         self._supports_native_search = supports_native_search
         self.base_url = "https://openrouter.ai/api/v1"
-
-        # Pricing per 1M tokens (will be fetched from OpenRouter API if available)
         self._pricing = {"prompt": 0.0, "completion": 0.0}
 
     @property
     def name(self) -> str:
-        """Human-readable adapter name."""
         return f"openrouter:{self.model}"
 
     @property
     def supports_native_search(self) -> bool:
-        """Whether this model supports native search."""
         return self._supports_native_search
 
     async def verify(self) -> None:
@@ -73,11 +218,7 @@ class OpenRouterAdapter:
             async with httpx.AsyncClient(timeout=10) as client:
                 response = await client.post(
                     f"{self.base_url}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "HTTP-Referer": "https://github.com/naomi-kynes/winterfox",
-                        "X-Title": "Winterfox Research System",
-                    },
+                    headers=self._headers(),
                     json={
                         "model": self.model,
                         "messages": [{"role": "user", "content": "hi"}],
@@ -96,6 +237,13 @@ class OpenRouterAdapter:
                 ) from e
             raise
 
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.api_key}",
+            "HTTP-Referer": "https://github.com/naomi-kynes/winterfox",
+            "X-Title": "Winterfox Research System",
+        }
+
     @retry(
         retry=retry_if_exception_type((httpx.ConnectError, httpx.TimeoutException)),
         stop=stop_after_attempt(3),
@@ -108,30 +256,16 @@ class OpenRouterAdapter:
         tools: list[ToolDefinition],
         max_iterations: int = 30,
     ) -> AgentOutput:
-        """
-        Run agent with tool-use loop.
-
-        Args:
-            system_prompt: System instructions
-            user_prompt: User request
-            tools: Available tools
-            max_iterations: Maximum tool-use iterations
-
-        Returns:
-            AgentOutput with findings and metadata
-        """
         start_time = datetime.now()
-        searches_performed = []
+        searches_performed: list[SearchRecord] = []
         total_tokens = 0
         input_tokens = 0
         output_tokens = 0
 
-        # Convert tools to OpenAI format
         tools_schema = [self._convert_tool_to_openai_schema(t) for t in tools]
         tool_map = {t.name: t for t in tools}
 
-        # Initialize messages
-        messages = [
+        messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
@@ -140,14 +274,9 @@ class OpenRouterAdapter:
             for iteration in range(max_iterations):
                 logger.debug(f"[{self.name}] Iteration {iteration + 1}/{max_iterations}")
 
-                # Make API request
                 response = await client.post(
                     f"{self.base_url}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "HTTP-Referer": "https://github.com/naomi-kynes/winterfox",
-                        "X-Title": "Winterfox Research System",
-                    },
+                    headers=self._headers(),
                     json={
                         "model": self.model,
                         "messages": messages,
@@ -161,9 +290,8 @@ class OpenRouterAdapter:
                         provider="OpenRouter", api_key_env="OPENROUTER_API_KEY"
                     )
                 if response.status_code != 200:
-                    error_text = response.text
                     raise RuntimeError(
-                        f"OpenRouter API error ({response.status_code}): {error_text}"
+                        f"OpenRouter API error ({response.status_code}): {response.text}"
                     )
 
                 result = response.json()
@@ -180,80 +308,73 @@ class OpenRouterAdapter:
                 message = result["choices"][0]["message"]
                 finish_reason = result["choices"][0].get("finish_reason")
 
-                # Check for tool calls
-                tool_calls = message.get("tool_calls", [])
+                # Normalize tool calls from whatever format the model returned
+                normalized_calls = normalize_tool_calls(message)
 
-                if not tool_calls or finish_reason == "stop":
-                    # No more tool calls, extract final response
+                if not normalized_calls or finish_reason == "stop":
                     messages.append(message)
                     break
 
-                # Execute tools
+                # Append assistant message (preserve original for conversation)
                 messages.append(message)
 
+                # Execute each tool call
                 tool_results = []
-                for tool_call in tool_calls:
-                    tool_name = tool_call["function"]["name"]
-                    tool_args_str = tool_call["function"]["arguments"]
+                for tc in normalized_calls:
+                    logger.info(f" Calling tool: {tc.name}")
 
-                    logger.info(f"[{self.name}] Calling tool: {tool_name}")
-
-                    # Parse arguments
-                    import json
-
-                    tool_args = json.loads(tool_args_str)
-
-                    # Execute tool
-                    tool_def = tool_map.get(tool_name)
+                    tool_def = tool_map.get(tc.name)
                     if not tool_def:
-                        result_content = f"Error: Tool {tool_name} not found"
+                        result_content = f"Error: Tool '{tc.name}' not found. Available tools: {', '.join(tool_map.keys())}"
                     else:
                         try:
-                            result = await tool_def.execute(**tool_args)
+                            exec_result = await tool_def.execute(**tc.arguments)
 
-                            # Track searches
-                            if tool_name == "web_search":
+                            if tc.name == "web_search":
                                 searches_performed.append(
                                     SearchRecord(
-                                        query=tool_args.get("query", ""),
+                                        query=tc.arguments.get("query", ""),
                                         engine="openrouter-tools",
                                         timestamp=datetime.now(),
-                                        results_summary=str(result)[:200],
+                                        results_summary=str(exec_result)[:200],
                                         urls_visited=[],
                                     )
                                 )
 
-                            result_content = json.dumps(result)
+                            result_content = json.dumps(exec_result)
                         except Exception as e:
-                            logger.error(f"Tool {tool_name} failed: {e}")
-                            result_content = f"Error: {str(e)}"
+                            logger.error(f"Tool {tc.name} failed: {e}")
+                            result_content = f"Error executing {tc.name}: {e}"
 
-                    # Add tool result to messages
                     tool_results.append(
                         {
                             "role": "tool",
-                            "tool_call_id": tool_call["id"],
+                            "tool_call_id": tc.id,
                             "content": result_content,
                         }
                     )
 
                 messages.extend(tool_results)
 
-        # Calculate duration and cost
         duration = (datetime.now() - start_time).total_seconds()
         cost_usd = self._calculate_cost(input_tokens, output_tokens)
+        findings = self._extract_findings(messages)
 
-        # Parse findings from conversation
-        findings = self._extract_findings_from_messages(messages)
-
-        # Extract self-critique
-        final_message = messages[-1] if messages else {"content": ""}
-        self_critique = final_message.get("content", "No critique provided")
+        final_message = messages[-1] if messages else {}
+        self_critique = ""
+        if isinstance(final_message.get("content"), str):
+            self_critique = final_message["content"]
+        if not self_critique:
+            self_critique = "No critique provided"
 
         return AgentOutput(
             findings=findings,
             self_critique=self_critique,
-            raw_text="\n".join([m.get("content", "") for m in messages if isinstance(m.get("content"), str)]),
+            raw_text="\n".join(
+                m.get("content", "")
+                for m in messages
+                if isinstance(m.get("content"), str)
+            ),
             searches_performed=searches_performed,
             cost_usd=cost_usd,
             duration_seconds=duration,
@@ -276,59 +397,52 @@ class OpenRouterAdapter:
         }
 
     def _calculate_cost(self, input_tokens: int, output_tokens: int) -> float:
-        """
-        Calculate cost in USD.
-
-        OpenRouter pricing varies by model. We use conservative estimates
-        if exact pricing is not available.
-        """
         input_cost = (input_tokens / 1_000_000) * self._pricing["prompt"]
         output_cost = (output_tokens / 1_000_000) * self._pricing["completion"]
         return input_cost + output_cost
 
-    def _extract_findings_from_messages(self, messages: list[dict]) -> list[Finding]:
+    def _extract_findings(self, messages: list[dict]) -> list[Finding]:
         """
-        Extract findings from tool calls to note_finding.
+        Extract findings from note_finding tool calls across all messages.
 
-        Looks for tool calls to note_finding and parses the arguments.
+        Uses the same normalize_tool_calls path so embedded-in-content tool
+        calls are also captured.
         """
         findings = []
 
         for msg in messages:
-            if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                for tool_call in msg["tool_calls"]:
-                    if tool_call["function"]["name"] == "note_finding":
-                        import json
+            if msg.get("role") != "assistant":
+                continue
 
-                        try:
-                            args = json.loads(tool_call["function"]["arguments"])
+            for tc in normalize_tool_calls(msg):
+                if tc.name != "note_finding":
+                    continue
 
-                            # Parse evidence
-                            evidence = []
-                            for ev in args.get("evidence", []):
-                                evidence.append(
-                                    Evidence(
-                                        text=ev.get("text", ""),
-                                        source=ev.get("source", ""),
-                                        date=datetime.now(),
-                                        verified_by=[self.name],
-                                    )
-                                )
+                try:
+                    args = tc.arguments
+                    evidence = [
+                        Evidence(
+                            text=ev.get("text", ""),
+                            source=ev.get("source", ""),
+                            date=datetime.now(),
+                            verified_by=[self.name],
+                        )
+                        for ev in args.get("evidence", [])
+                    ]
 
-                            # Create finding
-                            finding = Finding(
-                                claim=args.get("claim", ""),
-                                confidence=args.get("confidence", 0.5),
-                                evidence=evidence,
-                                suggested_parent_id=args.get("suggested_parent_id"),
-                                suggested_children=args.get("suggested_children", []),
-                                tags=args.get("tags", []),
-                            )
-
-                            findings.append(finding)
-
-                        except Exception as e:
-                            logger.warning(f"Failed to parse finding: {e}")
+                    findings.append(
+                        Finding(
+                            claim=args.get("claim", ""),
+                            confidence=args.get("confidence", 0.5),
+                            evidence=evidence,
+                            suggested_parent_id=args.get("suggested_parent_id"),
+                            suggested_children=args.get("suggested_children", []),
+                            tags=args.get("tags", []),
+                            finding_type=args.get("finding_type"),
+                        )
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to parse finding: {e}")
 
         return findings
 

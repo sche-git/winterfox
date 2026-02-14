@@ -2,14 +2,23 @@
 Graph service - Business logic for knowledge graph operations.
 """
 
+import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from ...graph.models import KnowledgeNode
 from ...graph.store import KnowledgeGraph
 from ..models.api_models import (
+    AgentFinding,
+    AgentOutputSummary,
+    AgentSearchRecord,
+    ContradictionItem,
+    CycleDetailResponse,
+    CycleResponse,
+    CyclesListResponse,
     EvidenceItem,
+    FindingEvidence,
     GraphSummaryResponse,
     GraphTreeResponse,
     NodeResponse,
@@ -59,6 +68,10 @@ class GraphService:
 
     def _node_to_response(self, node: KnowledgeNode) -> NodeResponse:
         """Convert KnowledgeNode to NodeResponse."""
+        # Map internal statuses to API-compatible ones
+        status_map = {"killed": "archived", "speculative": "active"}
+        api_status = status_map.get(node.status, node.status)
+
         return NodeResponse(
             id=node.id,
             claim=node.claim,
@@ -66,17 +79,18 @@ class GraphService:
             importance=node.importance,
             depth=node.depth,
             parent_id=node.parent_id,
-            children_ids=node.children,
+            children_ids=node.children_ids,
             evidence=[
                 EvidenceItem(
                     text=e.text,
                     source=e.source,
-                    date=e.timestamp,
-                    verified_by=e.verified_by if hasattr(e, "verified_by") else [],
+                    date=e.date,
+                    verified_by=e.verified_by,
                 )
                 for e in node.evidence
             ],
-            status=node.status,
+            status=api_status,
+            node_type=node.node_type,
             created_at=node.created_at,
             updated_at=node.updated_at,
         )
@@ -246,6 +260,7 @@ class GraphService:
                 claim=node.claim,
                 confidence=node.confidence,
                 importance=node.importance,
+                node_type=node.node_type,
                 children=children,
             )
 
@@ -293,3 +308,258 @@ class GraphService:
             )
 
         return SearchResponse(results=search_results)
+
+    # --- Cycle Operations ---
+
+    async def get_cycles(
+        self,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> CyclesListResponse:
+        """
+        Get paginated list of research cycles.
+
+        Args:
+            limit: Max cycles to return
+            offset: Offset for pagination
+
+        Returns:
+            CyclesListResponse with cycles and total count
+        """
+        if not Path(self.db_path).exists():
+            return CyclesListResponse(cycles=[], total=0)
+
+        graph = await self._get_graph()
+
+        # Get cycle outputs from database
+        rows = await graph.list_cycle_outputs(
+            workspace_id=self.workspace_id,
+            limit=limit,
+            offset=offset,
+        )
+
+        # Get total count
+        total = await self._count_cycle_outputs(graph)
+
+        # Map database rows to CycleResponse models
+        cycles = []
+        for row in rows:
+            started_at = datetime.fromisoformat(row["created_at"]) if isinstance(row["created_at"], str) else row["created_at"]
+            completed_at = None
+            if row["duration_seconds"] and row["duration_seconds"] > 0:
+                completed_at = started_at + timedelta(seconds=row["duration_seconds"])
+
+            status: str = "completed" if row["success"] else "failed"
+            findings_count = row.get("findings_created", 0) + row.get("findings_updated", 0)
+
+            cycles.append(
+                CycleResponse(
+                    id=row["cycle_id"],
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    status=status,
+                    focus_node_id=row.get("target_node_id"),
+                    target_claim=row.get("target_claim", ""),
+                    total_cost_usd=row.get("total_cost_usd", 0.0),
+                    findings_count=findings_count,
+                    agents_used=[],
+                    duration_seconds=row.get("duration_seconds"),
+                )
+            )
+
+        return CyclesListResponse(cycles=cycles, total=total)
+
+    async def get_cycle_detail(self, cycle_id: int) -> CycleDetailResponse | None:
+        """
+        Get detailed information for a single cycle.
+
+        Args:
+            cycle_id: Cycle identifier
+
+        Returns:
+            CycleDetailResponse or None if not found
+        """
+        graph = await self._get_graph()
+        data = await graph.get_cycle_output(cycle_id)
+
+        if data is None:
+            return None
+
+        agent_outputs = []
+        for agent in data.get("agent_outputs", []):
+            raw_findings = json.loads(agent["findings"]) if isinstance(agent["findings"], str) else agent["findings"]
+            raw_searches = json.loads(agent["searches_performed"]) if isinstance(agent["searches_performed"], str) else agent["searches_performed"]
+
+            findings = []
+            for f in raw_findings:
+                evidence = []
+                for e in f.get("evidence", []):
+                    if isinstance(e, dict):
+                        evidence.append(FindingEvidence(
+                            text=e.get("text", ""),
+                            source=e.get("source", ""),
+                            date=e.get("date"),
+                        ))
+                findings.append(AgentFinding(
+                    claim=f.get("claim", ""),
+                    confidence=f.get("confidence", 0.5),
+                    evidence=evidence,
+                    tags=f.get("tags", []),
+                    finding_type=f.get("finding_type"),
+                ))
+
+            searches = []
+            for s in raw_searches:
+                if isinstance(s, dict):
+                    searches.append(AgentSearchRecord(
+                        query=s.get("query", ""),
+                        engine=s.get("engine", ""),
+                        results_count=s.get("results_count", 0),
+                    ))
+
+            agent_outputs.append(
+                AgentOutputSummary(
+                    agent_name=agent["agent_name"],
+                    model=agent.get("agent_model", ""),
+                    role=agent.get("role", "secondary"),
+                    cost_usd=agent.get("cost_usd", 0.0),
+                    total_tokens=agent.get("total_tokens", 0),
+                    input_tokens=agent.get("input_tokens", 0),
+                    output_tokens=agent.get("output_tokens", 0),
+                    duration_seconds=agent.get("duration_seconds", 0.0),
+                    searches_performed=len(raw_searches),
+                    findings_count=len(raw_findings),
+                    self_critique=agent.get("self_critique", ""),
+                    findings=findings,
+                    searches=searches,
+                )
+            )
+
+        # Parse consensus findings
+        raw_consensus = data.get("consensus_findings", [])
+        if isinstance(raw_consensus, str):
+            try:
+                raw_consensus = json.loads(raw_consensus)
+            except (json.JSONDecodeError, TypeError):
+                raw_consensus = []
+        consensus_list = [str(c) for c in raw_consensus] if raw_consensus else []
+
+        # Parse contradictions
+        raw_contradictions = data.get("contradictions", [])
+        if isinstance(raw_contradictions, str):
+            try:
+                raw_contradictions = json.loads(raw_contradictions)
+            except (json.JSONDecodeError, TypeError):
+                raw_contradictions = []
+        contradictions = []
+        for c in (raw_contradictions or []):
+            if isinstance(c, dict):
+                contradictions.append(ContradictionItem(
+                    claim_a=c.get("claim_a", ""),
+                    claim_b=c.get("claim_b", ""),
+                    description=c.get("description", str(c)),
+                ))
+            elif isinstance(c, str):
+                contradictions.append(ContradictionItem(description=c))
+
+        return CycleDetailResponse(
+            id=data["cycle_id"],
+            target_node_id=data.get("target_node_id", ""),
+            target_claim=data.get("target_claim", ""),
+            findings_created=data.get("findings_created", 0),
+            findings_updated=data.get("findings_updated", 0),
+            findings_skipped=data.get("findings_skipped", 0),
+            consensus_findings=consensus_list,
+            contradictions=contradictions,
+            synthesis_reasoning=data.get("synthesis_reasoning", "") or "",
+            selection_strategy=data.get("selection_strategy"),
+            selection_reasoning=data.get("selection_reasoning"),
+            total_cost_usd=data.get("total_cost_usd", 0.0),
+            total_tokens=data.get("total_tokens", 0),
+            duration_seconds=data.get("duration_seconds", 0.0),
+            agent_count=data.get("agent_count", 0),
+            success=bool(data.get("success", True)),
+            error_message=data.get("error_message"),
+            created_at=data.get("created_at"),
+            agent_outputs=agent_outputs,
+        )
+
+    async def get_node_type_counts(self) -> dict[str, int]:
+        """
+        Count nodes by node_type.
+
+        Returns:
+            Dict mapping node_type to count (e.g. {"hypothesis": 5, "supporting": 12})
+        """
+        if not Path(self.db_path).exists():
+            return {}
+
+        graph = await self._get_graph()
+        nodes = await graph.get_all_active_nodes()
+
+        counts: dict[str, int] = {}
+        for node in nodes:
+            if node.node_type:
+                counts[node.node_type] = counts.get(node.node_type, 0) + 1
+        return counts
+
+    async def get_cycle_stats(self) -> tuple[int, int, int, float, float, dict[str, float]]:
+        """
+        Get aggregate cycle statistics.
+
+        Returns:
+            Tuple of (total, successful, failed, avg_duration, total_cost, cost_by_agent)
+        """
+        if not Path(self.db_path).exists():
+            return 0, 0, 0, 0.0, 0.0, {}
+
+        graph = await self._get_graph()
+
+        async with graph._get_db() as db:
+            # Aggregate stats from cycle_outputs
+            cursor = await db.execute(
+                """
+                SELECT
+                    COUNT(*) as total,
+                    SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful,
+                    SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failed,
+                    AVG(duration_seconds) as avg_duration,
+                    SUM(total_cost_usd) as total_cost
+                FROM cycle_outputs
+                WHERE workspace_id = ?
+                """,
+                (self.workspace_id,),
+            )
+            row = await cursor.fetchone()
+            total = row[0] or 0
+            successful = row[1] or 0
+            failed = row[2] or 0
+            avg_duration = row[3] or 0.0
+            total_cost = row[4] or 0.0
+
+            # Cost by agent
+            cursor = await db.execute(
+                """
+                SELECT a.agent_name, SUM(a.cost_usd)
+                FROM agent_outputs a
+                JOIN cycle_outputs c ON a.cycle_output_id = c.id
+                WHERE c.workspace_id = ?
+                GROUP BY a.agent_name
+                """,
+                (self.workspace_id,),
+            )
+            cost_by_agent = {}
+            for agent_row in await cursor.fetchall():
+                cost_by_agent[agent_row[0]] = agent_row[1] or 0.0
+
+        return total, successful, failed, avg_duration, total_cost, cost_by_agent
+
+    async def _count_cycle_outputs(self, graph: KnowledgeGraph) -> int:
+        """Count total cycle outputs for pagination."""
+        async with graph._get_db() as db:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM cycle_outputs WHERE workspace_id = ?",
+                (self.workspace_id,),
+            )
+            row = await cursor.fetchone()
+            return row[0] if row else 0

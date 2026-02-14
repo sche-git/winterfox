@@ -21,6 +21,7 @@ export interface Node {
   children_ids: string[];
   evidence: Evidence[];
   status: 'active' | 'archived' | 'merged';
+  node_type: 'question' | 'hypothesis' | 'supporting' | 'opposing' | null;
   created_at: string;
   updated_at: string;
 }
@@ -47,6 +48,7 @@ export interface NodeTreeItem {
   claim: string;
   confidence: number;
   importance: number;
+  node_type: 'question' | 'hypothesis' | 'supporting' | 'opposing' | null;
   children: NodeTreeItem[];
 }
 
@@ -73,6 +75,7 @@ export interface Cycle {
   completed_at: string | null;
   status: 'running' | 'completed' | 'failed';
   focus_node_id: string | null;
+  target_claim: string;
   total_cost_usd: number;
   findings_count: number;
   agents_used: string[];
@@ -84,19 +87,67 @@ export interface CyclesListResponse {
   total: number;
 }
 
+export interface FindingEvidence {
+  text: string;
+  source: string;
+  date: string | null;
+}
+
+export interface AgentFinding {
+  claim: string;
+  confidence: number;
+  evidence: FindingEvidence[];
+  tags: string[];
+  finding_type: 'hypothesis' | 'supporting' | 'opposing' | null;
+}
+
+export interface AgentSearchRecord {
+  query: string;
+  engine: string;
+  results_count: number;
+}
+
 export interface AgentOutputSummary {
   agent_name: string;
+  model: string;
+  role: string;
   cost_usd: number;
+  total_tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  duration_seconds: number;
   searches_performed: number;
   findings_count: number;
+  self_critique: string;
+  findings: AgentFinding[];
+  searches: AgentSearchRecord[];
+}
+
+export interface ContradictionItem {
+  claim_a: string;
+  claim_b: string;
+  description: string;
 }
 
 export interface CycleDetail {
   id: number;
+  target_node_id: string;
+  target_claim: string;
   findings_created: number;
   findings_updated: number;
-  consensus_findings: number;
-  divergent_findings: number;
+  findings_skipped: number;
+  consensus_findings: string[];
+  contradictions: ContradictionItem[];
+  synthesis_reasoning: string;
+  selection_strategy: 'EXPLORE' | 'DEEPEN' | 'CHALLENGE' | null;
+  selection_reasoning: string | null;
+  total_cost_usd: number;
+  total_tokens: number;
+  duration_seconds: number;
+  agent_count: number;
+  success: boolean;
+  error_message: string | null;
+  created_at: string | null;
   agent_outputs: AgentOutputSummary[];
 }
 
@@ -114,6 +165,9 @@ export interface GraphStats {
   total_nodes: number;
   avg_confidence: number;
   avg_importance: number;
+  hypothesis_count: number;
+  supporting_count: number;
+  opposing_count: number;
 }
 
 export interface CycleStats {
@@ -249,6 +303,7 @@ export interface NodeCreatedEvent extends BaseEvent {
     parent_id: string | null;
     claim: string;
     confidence: number;
+    node_type: string | null;
   };
 }
 

@@ -17,6 +17,47 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _build_strategy_section(
+    strategy: str | None,
+    selection_reasoning: str | None,
+) -> str:
+    """Build the strategy-specific 'What We Need' section."""
+    if strategy == "EXPLORE":
+        reasoning_line = f"\n**Strategist reasoning**: {selection_reasoning}\n" if selection_reasoning else ""
+        return f"""## What We Need — EXPLORE (New Hypotheses)
+{reasoning_line}
+1. **Propose new hypotheses**: What are the possible answers or strategies? Use `finding_type="hypothesis"` for each
+2. **Identify blind spots**: What hasn't been considered yet?
+3. **Breadth over depth**: Survey the landscape of possibilities
+4. **Support initial hypotheses**: For each hypothesis, find at least one piece of evidence"""
+
+    if strategy == "CHALLENGE":
+        reasoning_line = f"\n**Strategist reasoning**: {selection_reasoning}\n" if selection_reasoning else ""
+        return f"""## What We Need — CHALLENGE (Counter-Evidence)
+{reasoning_line}
+1. **Find counter-evidence**: Look for data that contradicts the current claim. Use `finding_type="opposing"`
+2. **Devil's advocate**: What are the strongest arguments against this?
+3. **Stress-test assumptions**: Which assumptions are weakest?
+4. **Alternative explanations**: Could the same data support a different conclusion?"""
+
+    if strategy == "DEEPEN":
+        reasoning_line = f"\n**Strategist reasoning**: {selection_reasoning}\n" if selection_reasoning else ""
+        return f"""## What We Need — DEEPEN (More Evidence)
+{reasoning_line}
+1. **Verify the claim**: Is the current statement accurate? Find specific evidence. Use `finding_type="supporting"` or `"opposing"`
+2. **Add specificity**: Find concrete numbers, dates, examples, quotes
+3. **Strengthen or weaken**: Does the evidence support or contradict? Be honest
+4. **Find primary sources**: Prefer official reports, filings, peer-reviewed research"""
+
+    # Default (no strategy or unknown) — existing behavior
+    return """## What We Need
+
+1. **Verify the claim**: Is the current statement accurate? Find specific evidence
+2. **Add specificity**: Find concrete numbers, dates, examples, quotes
+3. **Identify sub-topics**: What aspects of this claim need deeper investigation?
+4. **Find contradictions**: Look for alternative viewpoints or conflicting data"""
+
+
 async def generate_research_prompt(
     graph: "KnowledgeGraph",
     target_node: "KnowledgeNode",
@@ -24,6 +65,9 @@ async def generate_research_prompt(
     max_searches: int = 25,
     search_instructions: str | None = None,
     context_files: list[dict[str, str]] | None = None,
+    research_context: str | None = None,
+    strategy: str | None = None,
+    selection_reasoning: str | None = None,
 ) -> tuple[str, str]:
     """
     Generate system and user prompts for researching a target node.
@@ -35,6 +79,9 @@ async def generate_research_prompt(
         max_searches: Maximum web searches allowed
         search_instructions: Optional custom search guidance
         context_files: Optional prior research documents
+        research_context: Pre-rendered accumulated knowledge from prior cycles
+        strategy: Research strategy (EXPLORE, DEEPEN, CHALLENGE) from LLM selection
+        selection_reasoning: Why this strategy was chosen
 
     Returns:
         (system_prompt, user_prompt) tuple
@@ -70,6 +117,7 @@ high-quality, verifiable information.
 3. **Skeptical**: Challenge assumptions, look for contradicting views
 4. **Structured**: Use note_finding tool to record each discrete finding
 5. **Efficient**: You have a budget of {max_searches} web searches - use them wisely
+6. **Build on prior work**: Review the accumulated research context. Do NOT repeat searches already performed. Focus on gaps, contradictions, and new angles
 
 ## Finding Format
 
@@ -82,6 +130,10 @@ When you discover information, use the note_finding tool with:
   - 0.3-0.4: Weak sources, speculation
   - 0.0-0.2: Hearsay, unverified claims
 - **evidence**: List of sources with specific quotes/data points
+- **finding_type** (optional): Categorize your finding:
+  - `"hypothesis"`: A proposed answer, strategy, or approach
+  - `"supporting"`: Evidence that supports the parent claim/hypothesis
+  - `"opposing"`: Evidence that contradicts or challenges the parent claim
 
 ## Source Quality Hierarchy
 
@@ -106,24 +158,23 @@ Your research will be merged with findings from other agents, so focus on verifi
 
             context_section += f"### {doc['filename']}\n\n{content}\n\n"
 
+    # Build accumulated research context section
+    accumulated_context = ""
+    if research_context:
+        accumulated_context = f"\n{research_context}\n\n"
+
     # User prompt (specific research task)
     user_prompt = f"""## Current Knowledge State
 
 {focused_view}
-{context_section}
-## Research Objective
+{context_section}{accumulated_context}## Research Objective
 
 Focus on: **{target_node.claim}**
 
 Current confidence: {target_node.confidence:.2f}
 Current depth: {target_node.depth} research cycles
 
-## What We Need
-
-1. **Verify the claim**: Is the current statement accurate? Find specific evidence
-2. **Add specificity**: Find concrete numbers, dates, examples, quotes
-3. **Identify sub-topics**: What aspects of this claim need deeper investigation?
-4. **Find contradictions**: Look for alternative viewpoints or conflicting data
+{_build_strategy_section(strategy, selection_reasoning)}
 
 ## Success Criteria
 

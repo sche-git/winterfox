@@ -19,6 +19,24 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _importance_for_type(finding_type: str | None) -> float:
+    """Return default importance based on finding type."""
+    if finding_type == "hypothesis":
+        return 0.8
+    if finding_type == "opposing":
+        return 0.7
+    if finding_type == "supporting":
+        return 0.5
+    return 0.5  # Default for untyped findings
+
+
+def _node_type_from_finding(finding_type: str | None) -> str | None:
+    """Map finding_type to node_type."""
+    if finding_type in ("hypothesis", "supporting", "opposing"):
+        return finding_type
+    return None
+
+
 async def merge_findings_into_graph(
     graph: "KnowledgeGraph",
     findings: list["Finding"],
@@ -60,9 +78,10 @@ async def merge_findings_into_graph(
     for finding in findings:
         logger.debug(f"Processing finding: {finding.claim[:60]}...")
 
-        # Search for similar existing nodes
+        # Search for similar existing nodes (type-aware: opposing ≠ supporting)
         existing_nodes = await _find_similar_nodes(
-            graph, finding.claim, target_node_id, similarity_threshold
+            graph, finding.claim, target_node_id, similarity_threshold,
+            finding_type=finding.finding_type,
         )
 
         if existing_nodes:
@@ -140,16 +159,21 @@ async def merge_findings_into_graph(
             # Apply confidence discount (first-time findings are less certain)
             initial_confidence = finding.confidence * confidence_discount
 
+            # Determine node_type and importance from finding_type
+            node_type = _node_type_from_finding(finding.finding_type)
+            importance = _importance_for_type(finding.finding_type)
+
             # Create node
             new_node = await graph.add_node(
                 claim=finding.claim,
                 parent_id=parent_id,
                 confidence=initial_confidence,
-                importance=0.5,  # Default importance, can be adjusted
+                importance=importance,
                 depth=0,  # Will be recalculated
                 created_by_cycle=cycle_id,
                 evidence=evidence_list,
                 tags=finding.tags,
+                node_type=node_type,
             )
 
             logger.info(
@@ -176,15 +200,20 @@ async def _find_similar_nodes(
     claim: str,
     parent_id: str | None,
     threshold: float,
+    finding_type: str | None = None,
 ) -> list["KnowledgeNode"]:
     """
-    Find nodes similar to a claim.
+    Find nodes similar to a claim, respecting type boundaries.
+
+    Opposing and supporting findings with similar text should NOT merge
+    with each other — they represent fundamentally different stances.
 
     Args:
         graph: Knowledge graph
         claim: Claim to match
         parent_id: Optional parent to restrict search to siblings
         threshold: Minimum similarity threshold
+        finding_type: Type of the incoming finding (for type filtering)
 
     Returns:
         List of similar nodes (sorted by similarity, best first)
@@ -198,6 +227,14 @@ async def _find_similar_nodes(
         threshold=threshold,
         limit=5,
     )
+
+    # Filter by compatible types: don't merge opposing with supporting
+    node_type = _node_type_from_finding(finding_type)
+    if node_type in ("supporting", "opposing"):
+        return [
+            node for _, node in similar
+            if node.node_type is None or node.node_type == node_type
+        ]
 
     # Return just the nodes (not the scores)
     return [node for _, node in similar]

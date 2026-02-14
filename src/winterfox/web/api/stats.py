@@ -44,25 +44,34 @@ async def get_overview_stats(
         # Get graph summary
         summary = await service.get_summary()
 
+        # Count nodes by type
+        type_counts = await service.get_node_type_counts()
+
         # Build response
         graph_stats = GraphStats(
             total_nodes=summary.total_nodes,
             avg_confidence=summary.avg_confidence,
             avg_importance=summary.avg_importance,
+            hypothesis_count=type_counts.get("hypothesis", 0),
+            supporting_count=type_counts.get("supporting", 0),
+            opposing_count=type_counts.get("opposing", 0),
         )
 
-        # TODO: Implement cycle statistics in Phase 2
+        # Get cycle statistics from database
+        total, successful, failed, avg_duration, total_cost, cost_by_agent = (
+            await service.get_cycle_stats()
+        )
+
         cycle_stats = CycleStats(
-            total=0,
-            successful=0,
-            failed=0,
-            avg_duration_seconds=0.0,
+            total=total,
+            successful=successful,
+            failed=failed,
+            avg_duration_seconds=avg_duration,
         )
 
-        # TODO: Implement cost tracking in Phase 2
         cost_stats = CostStats(
-            total_usd=0.0,
-            by_agent={},
+            total_usd=total_cost,
+            by_agent=cost_by_agent,
         )
 
         activity_stats = ActivityStats(

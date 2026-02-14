@@ -4,6 +4,7 @@
 
 import React from 'react';
 import StatsCards from './StatsCards';
+import CycleHistory from '../CycleMonitor/CycleHistory';
 import EventFeed from '../CycleMonitor/EventFeed';
 import { useGraphStore } from '../../stores/graphStore';
 import { useCycleStore } from '../../stores/cycleStore';
@@ -146,6 +147,23 @@ const Dashboard: React.FC = () => {
                   <p className="text-sm text-muted-foreground">Loading...</p>
                 </div>
               )}
+            </div>
+          </div>
+        </section>
+
+        {/* Cycle History Section */}
+        <section className="border-b py-16">
+          <div className="container mx-auto px-4">
+            <div className="mx-auto max-w-4xl">
+              <div className="mb-6">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Research History
+                </p>
+                <h2 className="mt-2 text-2xl font-bold tracking-tight">
+                  Past Cycles
+                </h2>
+              </div>
+              <CycleHistory />
             </div>
           </div>
         </section>

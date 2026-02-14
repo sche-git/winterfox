@@ -41,7 +41,7 @@ class KimiAdapter(BaseAdapter):
             timeout: Request timeout in seconds
         """
         super().__init__(model, api_key)
-        self.base_url = "https://api.moonshot.cn/v1"
+        self.base_url = "https://api.moonshot.ai/v1"
         self.timeout = timeout
         self.supports_native_search = False  # Kimi doesn't have native search
 
@@ -387,6 +387,7 @@ class KimiAdapter(BaseAdapter):
                             )
                             for e in inp.get("evidence", [])
                         ],
+                        finding_type=inp.get("finding_type"),
                     )
                 )
 

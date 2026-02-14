@@ -16,13 +16,15 @@ import logging
 import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..agents.pool import AgentPool, SynthesisResult
-    from ..agents.protocol import AgentOutput, ToolDefinition
+    from ..agents.protocol import AgentAdapter, AgentOutput, ToolDefinition
     from ..graph.models import KnowledgeNode
     from ..graph.store import KnowledgeGraph
+    from .selection import SelectionDecision
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +63,8 @@ class ResearchCycle:
         search_instructions: str | None = None,
         context_files: list[dict[str, str]] | None = None,
         event_callback: EventCallback | None = None,
+        raw_output_dir: Path | None = None,
+        selection_adapter: "AgentAdapter | None" = None,
     ):
         """
         Initialize research cycle.
@@ -74,6 +78,8 @@ class ResearchCycle:
             search_instructions: Optional custom search guidance
             context_files: Optional prior research documents
             event_callback: Optional async callback for real-time events
+            raw_output_dir: Directory for markdown cycle exports
+            selection_adapter: Optional LLM adapter for intelligent node selection
         """
         self.graph = graph
         self.agent_pool = agent_pool
@@ -83,6 +89,8 @@ class ResearchCycle:
         self.search_instructions = search_instructions
         self.context_files = context_files or []
         self.last_selected_id: str | None = None
+        self.raw_output_dir = raw_output_dir
+        self.selection_adapter = selection_adapter
 
         # Event callback for real-time updates
         self.event_callback = event_callback
@@ -134,10 +142,19 @@ class ResearchCycle:
                 }
             })
 
+            selection_decision: "SelectionDecision | None" = None
+
             if target_node_id:
                 target = await self.graph.get_node(target_node_id)
                 if not target:
                     raise ValueError(f"Target node {target_node_id} not found")
+            elif self.selection_adapter:
+                from .selection import select_target_with_llm
+                target, selection_decision = await select_target_with_llm(
+                    self.graph, self.selection_adapter, self.last_selected_id
+                )
+                if not target:
+                    raise ValueError("No nodes available for research")
             else:
                 target = await select_target_node(self.graph, self.last_selected_id)
                 if not target:
@@ -160,6 +177,19 @@ class ResearchCycle:
                 }
             })
 
+            # Step 1.5: Build accumulated research context
+            from .research_context import ResearchContextBuilder
+
+            context_builder = ResearchContextBuilder(self.graph)
+            research_ctx = await context_builder.build()
+            rendered_context = research_ctx.render() or None
+
+            if rendered_context:
+                logger.info(
+                    f"[Cycle {self.cycle_id}] Built research context: "
+                    f"{len(rendered_context)} chars from {research_ctx.total_prior_cycles} prior cycles"
+                )
+
             # Step 2: Generate prompts
             await self._emit_event({
                 "type": "cycle.step",
@@ -176,6 +206,9 @@ class ResearchCycle:
                 max_searches,
                 search_instructions=self.search_instructions,
                 context_files=self.context_files,
+                research_context=rendered_context,
+                strategy=selection_decision.strategy if selection_decision else None,
+                selection_reasoning=selection_decision.reasoning if selection_decision else None,
             )
 
             # Step 3: Dispatch agents
@@ -379,6 +412,7 @@ class ResearchCycle:
                 synthesis_result=synthesis_result,
                 merge_stats=merge_stats,
                 target=target,
+                selection_decision=selection_decision,
             )
 
             return result
@@ -418,16 +452,18 @@ class ResearchCycle:
         result: CycleResult,
         synthesis_result: "SynthesisResult | None",
         merge_stats: dict,
-        target: KnowledgeNode,
+        target: "KnowledgeNode",
+        selection_decision: "SelectionDecision | None" = None,
     ) -> None:
         """
-        Save cycle output to database.
+        Save cycle output to database and export to markdown.
 
         Args:
             result: CycleResult with all outputs
             synthesis_result: SynthesisResult if multi-agent mode
             merge_stats: Merge statistics from graph integration
             target: Target node that was researched
+            selection_decision: LLM selection decision (strategy/reasoning)
         """
         try:
             # Save to database
@@ -441,10 +477,37 @@ class ResearchCycle:
                 total_cost_usd=result.total_cost_usd,
                 success=result.success,
                 error_message=result.error_message,
+                selection_strategy=selection_decision.strategy if selection_decision else None,
+                selection_reasoning=selection_decision.reasoning if selection_decision else None,
             )
 
             logger.info(f"Saved cycle {self.cycle_id} output to database (id={cycle_output_id})")
 
         except Exception as e:
             logger.error(f"Failed to save cycle output: {e}", exc_info=True)
-            # Don't fail the cycle if output saving fails
+
+        # Export to markdown (independent of DB save)
+        if self.raw_output_dir:
+            try:
+                await self._export_cycle_markdown()
+            except Exception as e:
+                logger.error(f"Failed to export cycle markdown: {e}", exc_info=True)
+
+    async def _export_cycle_markdown(self) -> None:
+        """Export cycle output to markdown file at raw/{date}/cycle_{id}.md."""
+        from datetime import datetime, timezone
+
+        from ..export.cycle_export import CycleExportService
+
+        export_service = CycleExportService(self.graph)
+        markdown = await export_service.export_cycle_markdown(self.cycle_id)
+
+        # Build date-nested path: raw/{YYYY-MM-DD}/cycle_{id}.md
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        date_dir = self.raw_output_dir / today
+        date_dir.mkdir(parents=True, exist_ok=True)
+
+        output_path = date_dir / f"cycle_{self.cycle_id}.md"
+        output_path.write_text(markdown, encoding="utf-8")
+
+        logger.info(f"Exported cycle {self.cycle_id} to {output_path}")

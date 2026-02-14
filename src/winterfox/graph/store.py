@@ -175,6 +175,8 @@ SCHEMA_STATEMENTS = [
         duration_seconds REAL NOT NULL,
         success INTEGER NOT NULL DEFAULT 1,
         error_message TEXT,
+        selection_strategy TEXT,
+        selection_reasoning TEXT,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
         FOREIGN KEY (target_node_id) REFERENCES nodes(id) ON DELETE SET NULL
@@ -646,6 +648,8 @@ class KnowledgeGraph:
         total_cost_usd: float,
         success: bool = True,
         error_message: str | None = None,
+        selection_strategy: str | None = None,
+        selection_reasoning: str | None = None,
     ) -> int:
         """
         Save complete cycle output to database.
@@ -660,6 +664,8 @@ class KnowledgeGraph:
             total_cost_usd: Total cost across all agents
             success: Whether cycle succeeded
             error_message: Optional error message
+            selection_strategy: LLM selection strategy (EXPLORE/DEEPEN/CHALLENGE)
+            selection_reasoning: LLM selection reasoning
 
         Returns:
             cycle_output_id (int)
@@ -693,8 +699,8 @@ class KnowledgeGraph:
                     synthesis_reasoning, consensus_findings, contradictions,
                     findings_created, findings_updated, findings_skipped,
                     agent_count, total_tokens, total_cost_usd, duration_seconds,
-                    success, error_message
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    success, error_message, selection_strategy, selection_reasoning
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     cycle_id,
@@ -713,6 +719,8 @@ class KnowledgeGraph:
                     duration_seconds,
                     1 if success else 0,
                     error_message,
+                    selection_strategy,
+                    selection_reasoning,
                 ),
             )
 
@@ -774,6 +782,7 @@ class KnowledgeGraph:
                     for e in finding.evidence
                 ],
                 "tags": finding.tags,
+                "finding_type": getattr(finding, "finding_type", None),
             }
             findings_data.append(finding_dict)
         return json.dumps(findings_data)
@@ -814,9 +823,12 @@ class KnowledgeGraph:
                     synthesis_reasoning, consensus_findings, contradictions,
                     findings_created, findings_updated, findings_skipped,
                     agent_count, total_tokens, total_cost_usd, duration_seconds,
-                    success, error_message, created_at
+                    success, error_message, created_at,
+                    selection_strategy, selection_reasoning
                 FROM cycle_outputs
                 WHERE cycle_id = ? AND workspace_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
                 """,
                 (cycle_id, self.workspace_id),
             )
@@ -845,6 +857,8 @@ class KnowledgeGraph:
                 "success": bool(row[15]),
                 "error_message": row[16],
                 "created_at": row[17],
+                "selection_strategy": row[18],
+                "selection_reasoning": row[19],
             }
 
             # Get agent outputs
@@ -881,6 +895,24 @@ class KnowledgeGraph:
 
             cycle_data["agent_outputs"] = agent_outputs
             return cycle_data
+
+    async def get_max_cycle_id(self) -> int:
+        """
+        Get the maximum cycle_id stored for this workspace.
+
+        Returns:
+            Maximum cycle_id, or 0 if no cycles exist
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        async with self._get_db() as db:
+            cursor = await db.execute(
+                "SELECT MAX(cycle_id) FROM cycle_outputs WHERE workspace_id = ?",
+                (self.workspace_id,),
+            )
+            row = await cursor.fetchone()
+            return row[0] if row and row[0] is not None else 0
 
     async def list_cycle_outputs(
         self,
@@ -1028,6 +1060,85 @@ class KnowledgeGraph:
             })
 
         return results
+
+    async def get_all_search_queries(self, limit: int = 200) -> list[dict[str, str]]:
+        """
+        Get all search queries from recent agent outputs (batch query, no N+1).
+
+        Args:
+            limit: Maximum number of agent_output rows to scan
+
+        Returns:
+            List of dicts with 'query' and 'engine' keys
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        async with self._get_db() as db:
+            cursor = await db.execute(
+                """
+                SELECT ao.searches_performed
+                FROM agent_outputs ao
+                JOIN cycle_outputs co ON ao.cycle_output_id = co.id
+                WHERE co.workspace_id = ? AND co.success = 1
+                ORDER BY co.created_at DESC
+                LIMIT ?
+                """,
+                (self.workspace_id, limit),
+            )
+            rows = await cursor.fetchall()
+
+        results: list[dict[str, str]] = []
+        for row in rows:
+            try:
+                searches = json.loads(row[0]) if row[0] else []
+                for search in searches:
+                    if isinstance(search, dict) and "query" in search:
+                        results.append({
+                            "query": search["query"],
+                            "engine": search.get("engine", "unknown"),
+                        })
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+        return results
+
+    async def get_recent_critiques(self, limit: int = 10) -> list[dict[str, Any]]:
+        """
+        Get recent agent self-critiques (batch query, no N+1).
+
+        Args:
+            limit: Maximum number of critiques to return
+
+        Returns:
+            List of dicts with 'agent_name', 'cycle_id', 'self_critique'
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        async with self._get_db() as db:
+            cursor = await db.execute(
+                """
+                SELECT ao.agent_name, co.cycle_id, ao.self_critique
+                FROM agent_outputs ao
+                JOIN cycle_outputs co ON ao.cycle_output_id = co.id
+                WHERE co.workspace_id = ? AND co.success = 1
+                    AND ao.self_critique != ''
+                ORDER BY co.created_at DESC
+                LIMIT ?
+                """,
+                (self.workspace_id, limit),
+            )
+            rows = await cursor.fetchall()
+
+        return [
+            {
+                "agent_name": row[0],
+                "cycle_id": row[1],
+                "self_critique": row[2],
+            }
+            for row in rows
+        ]
 
     async def delete_old_cycle_outputs(
         self,

@@ -32,6 +32,7 @@ class NodeResponse(BaseModel):
     children_ids: list[str] = Field(default_factory=list)
     evidence: list[EvidenceItem] = Field(default_factory=list)
     status: Literal["active", "archived", "merged"] = "active"
+    node_type: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -64,6 +65,7 @@ class NodeTreeItem(BaseModel):
     claim: str
     confidence: float = Field(ge=0.0, le=1.0)
     importance: float = Field(ge=0.0, le=1.0)
+    node_type: str | None = None
     children: list["NodeTreeItem"] = Field(default_factory=list)
 
 
@@ -99,6 +101,7 @@ class CycleResponse(BaseModel):
     completed_at: datetime | None = None
     status: Literal["running", "completed", "failed"] = "running"
     focus_node_id: str | None = None
+    target_claim: str = ""
     total_cost_usd: float = Field(ge=0.0)
     findings_count: int = Field(ge=0)
     agents_used: list[str] = Field(default_factory=list)
@@ -112,23 +115,79 @@ class CyclesListResponse(BaseModel):
     total: int = Field(ge=0)
 
 
+class FindingEvidence(BaseModel):
+    """Evidence attached to a finding."""
+
+    text: str
+    source: str = ""
+    date: str | None = None
+
+
+class AgentFinding(BaseModel):
+    """Single finding from an agent."""
+
+    claim: str
+    confidence: float = Field(ge=0.0, le=1.0, default=0.5)
+    evidence: list[FindingEvidence] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    finding_type: str | None = None
+
+
+class AgentSearchRecord(BaseModel):
+    """Record of a search performed by an agent."""
+
+    query: str
+    engine: str = ""
+    results_count: int = Field(ge=0, default=0)
+
+
 class AgentOutputSummary(BaseModel):
     """Summary of agent's work in a cycle."""
 
     agent_name: str
+    model: str = ""
+    role: str = "secondary"
     cost_usd: float = Field(ge=0.0)
+    total_tokens: int = Field(ge=0, default=0)
+    input_tokens: int = Field(ge=0, default=0)
+    output_tokens: int = Field(ge=0, default=0)
+    duration_seconds: float = Field(ge=0.0, default=0.0)
     searches_performed: int = Field(ge=0)
     findings_count: int = Field(ge=0)
+    self_critique: str = ""
+    findings: list[AgentFinding] = Field(default_factory=list)
+    searches: list[AgentSearchRecord] = Field(default_factory=list)
+
+
+class ContradictionItem(BaseModel):
+    """A contradiction between agent findings."""
+
+    claim_a: str = ""
+    claim_b: str = ""
+    description: str = ""
 
 
 class CycleDetailResponse(BaseModel):
     """Detailed cycle information."""
 
     id: int
+    target_node_id: str = ""
+    target_claim: str = ""
     findings_created: int = Field(ge=0)
     findings_updated: int = Field(ge=0)
-    consensus_findings: int = Field(ge=0)
-    divergent_findings: int = Field(ge=0)
+    findings_skipped: int = Field(ge=0, default=0)
+    consensus_findings: list[str] = Field(default_factory=list)
+    contradictions: list[ContradictionItem] = Field(default_factory=list)
+    synthesis_reasoning: str = ""
+    selection_strategy: str | None = None
+    selection_reasoning: str | None = None
+    total_cost_usd: float = Field(ge=0.0, default=0.0)
+    total_tokens: int = Field(ge=0, default=0)
+    duration_seconds: float = Field(ge=0.0, default=0.0)
+    agent_count: int = Field(ge=0, default=0)
+    success: bool = True
+    error_message: str | None = None
+    created_at: str | None = None
     agent_outputs: list[AgentOutputSummary]
 
 
@@ -166,6 +225,9 @@ class GraphStats(BaseModel):
     total_nodes: int = Field(ge=0)
     avg_confidence: float = Field(ge=0.0, le=1.0)
     avg_importance: float = Field(ge=0.0, le=1.0)
+    hypothesis_count: int = Field(ge=0, default=0)
+    supporting_count: int = Field(ge=0, default=0)
+    opposing_count: int = Field(ge=0, default=0)
 
 
 class CycleStats(BaseModel):

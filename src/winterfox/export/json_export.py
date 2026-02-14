@@ -30,11 +30,12 @@ def _serialize_evidence(evidence: "Evidence") -> dict[str, Any]:
 
 def _serialize_node(node: "KnowledgeNode") -> dict[str, Any]:
     """Serialize node to JSON-compatible dict."""
-    return {
+    data = {
         "id": node.id,
         "workspace_id": node.workspace_id,
         "parent_id": node.parent_id,
         "claim": node.claim,
+        "node_type": node.node_type,
         "confidence": node.confidence,
         "importance": node.importance,
         "depth": node.depth,
@@ -47,6 +48,7 @@ def _serialize_node(node: "KnowledgeNode") -> dict[str, Any]:
         "created_by_cycle": node.created_by_cycle,
         "updated_by_cycle": node.updated_by_cycle,
     }
+    return data
 
 
 async def export_to_json(
@@ -254,6 +256,10 @@ async def import_from_json(
                 for e in node_data.get("evidence", [])
             ]
 
+            node_kwargs: dict[str, Any] = {}
+            if node_data.get("node_type"):
+                node_kwargs["node_type"] = node_data["node_type"]
+
             await graph.add_node(
                 claim=node_data["claim"],
                 parent_id=node_data.get("parent_id"),
@@ -263,6 +269,7 @@ async def import_from_json(
                 created_by_cycle=node_data.get("created_by_cycle", 0),
                 evidence=evidence,
                 tags=node_data.get("tags", []),
+                **node_kwargs,
             )
 
             stats["imported"] += 1

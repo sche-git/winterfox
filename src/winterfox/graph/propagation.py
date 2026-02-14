@@ -90,13 +90,29 @@ async def _recalculate_node_confidence(
     """
     Recalculate a node's confidence based on evidence and children.
 
-    Formula:
+    Dispatches to hypothesis-aware propagation when node_type == "hypothesis".
+
+    Formula (default):
     - If no children: confidence = evidence_confidence
     - If has children:
         child_weight = min(0.7, len(children) / 10)
         own_weight = 1 - child_weight
         confidence = own_weight * evidence_conf + child_weight * children_mean_conf
     """
+    # Dispatch to hypothesis-aware propagation when applicable
+    if node.node_type == "hypothesis" and node.children_ids:
+        children = await graph.get_children(node.id)
+        if children:
+            result = _recalculate_hypothesis_confidence(children)
+            if result is not None:
+                node.confidence = result
+                logger.debug(
+                    f"Hypothesis confidence for {node.id}: {node.confidence:.2f} "
+                    f"(support/oppose ratio)"
+                )
+                return
+
+    # Default propagation for legacy nodes and non-hypothesis types
     # Calculate own confidence from evidence
     own_confidence = evidence_to_confidence(node.evidence)
 
@@ -129,6 +145,40 @@ async def _recalculate_node_confidence(
         f"children={children_confidence:.2f} (weight={child_weight:.2f}), "
         f"final={node.confidence:.2f}"
     )
+
+
+def _recalculate_hypothesis_confidence(
+    children: list["KnowledgeNode"],
+) -> float | None:
+    """
+    Calculate hypothesis confidence from supporting vs. opposing evidence.
+
+    Formula:
+        supporting_total = sum(child.confidence for supporting children)
+        opposing_total = sum(child.confidence for opposing children)
+        confidence = supporting_total / (supporting_total + opposing_total)
+
+    Returns None if no typed children exist (falls back to default propagation).
+    """
+    supporting_total = 0.0
+    opposing_total = 0.0
+
+    for child in children:
+        if child.node_type == "supporting":
+            supporting_total += child.confidence
+        elif child.node_type == "opposing":
+            opposing_total += child.confidence
+
+    # If no typed children, fall back to default propagation
+    if supporting_total == 0.0 and opposing_total == 0.0:
+        return None
+
+    # Avoid division by zero: all supporting → 0.95, all opposing → 0.05
+    total = supporting_total + opposing_total
+    confidence = supporting_total / total
+
+    # Clamp to [0.05, 0.95] — nothing is 100% certain
+    return max(0.05, min(0.95, confidence))
 
 
 async def propagate_confidence_downward(

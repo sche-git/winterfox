@@ -9,6 +9,7 @@ The Orchestrator is the high-level coordinator that:
 """
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -43,6 +44,7 @@ class Orchestrator:
         consensus_boost: float = 0.15,
         search_instructions: str | None = None,
         context_files: list[dict[str, str]] | None = None,
+        raw_output_dir: Path | None = None,
     ):
         """
         Initialize orchestrator.
@@ -57,6 +59,7 @@ class Orchestrator:
             consensus_boost: Boost when agents agree (0.15)
             search_instructions: Optional custom search guidance
             context_files: Optional prior research documents
+            raw_output_dir: Directory for markdown cycle exports
         """
         self.graph = graph
         self.agent_pool = agent_pool
@@ -67,10 +70,18 @@ class Orchestrator:
         self.consensus_boost = consensus_boost
         self.search_instructions = search_instructions
         self.context_files = context_files or []
+        self.raw_output_dir = raw_output_dir
 
-        self.cycle_count = 0
+        self.cycle_count = 0  # Initialized from DB in _init_cycle_count()
         self.total_cost_usd = 0.0
         self.cycle_history: list["CycleResult"] = []
+        self._cycle_count_initialized = False
+
+    async def _init_cycle_count(self) -> None:
+        """Initialize cycle_count from database to continue numbering across runs."""
+        if not self._cycle_count_initialized:
+            self.cycle_count = await self.graph.get_max_cycle_id()
+            self._cycle_count_initialized = True
 
     async def run_cycle(
         self,
@@ -89,9 +100,15 @@ class Orchestrator:
         """
         from .cycle import ResearchCycle
 
+        await self._init_cycle_count()
         self.cycle_count += 1
 
         logger.info(f"=== Starting Cycle {self.cycle_count} ===")
+
+        # Use primary agent for LLM-driven selection
+        selection_adapter = (
+            self.agent_pool.adapters[0] if self.agent_pool.adapters else None
+        )
 
         # Create cycle executor
         cycle = ResearchCycle(
@@ -102,6 +119,8 @@ class Orchestrator:
             cycle_id=self.cycle_count,
             search_instructions=self.search_instructions,
             context_files=self.context_files,
+            raw_output_dir=self.raw_output_dir,
+            selection_adapter=selection_adapter,
         )
 
         # Execute cycle

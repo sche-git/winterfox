@@ -5,6 +5,7 @@ from .cycle import ResearchCycle
 from .selection import select_target_node
 from .prompts import generate_research_prompt
 from .merge import merge_findings_into_graph
+from .research_context import ResearchContext, ResearchContextBuilder, TokenBudget
 
 __all__ = [
     "Orchestrator",
@@ -12,4 +13,7 @@ __all__ = [
     "select_target_node",
     "generate_research_prompt",
     "merge_findings_into_graph",
+    "ResearchContext",
+    "ResearchContextBuilder",
+    "TokenBudget",
 ]

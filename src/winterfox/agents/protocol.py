@@ -7,7 +7,7 @@ enabling multi-provider support with a unified interface.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Protocol, runtime_checkable
+from typing import Any, Callable, Literal, Protocol, runtime_checkable
 
 
 @dataclass
@@ -40,6 +40,7 @@ class Finding:
     suggested_parent_id: str | None = None
     suggested_children: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
+    finding_type: Literal["hypothesis", "supporting", "opposing"] | None = None
 
 
 @dataclass

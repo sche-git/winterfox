@@ -98,6 +98,7 @@ async def note_finding(
     evidence: list[dict[str, str]],
     parent_id: str | None = None,
     tags: list[str] | None = None,
+    finding_type: str | None = None,
 ) -> dict[str, str]:
     """
     Record a new finding to the knowledge graph.
@@ -110,6 +111,7 @@ async def note_finding(
         evidence: List of evidence dicts with 'text' and 'source'
         parent_id: Optional parent node ID
         tags: Optional tags
+        finding_type: Optional type (hypothesis, supporting, opposing)
 
     Returns:
         Result dict with node_id
@@ -118,13 +120,16 @@ async def note_finding(
     # it just returns the finding for the orchestrator to process
     # The orchestrator will deduplicate and merge findings
 
-    return {
+    result: dict[str, Any] = {
         "status": "queued",
         "claim": claim[:100],
         "confidence": confidence,
         "evidence_count": len(evidence),
         "message": "Finding will be merged into graph after cycle completes",
     }
+    if finding_type:
+        result["finding_type"] = finding_type
+    return result
 
 
 def create_note_finding_tool() -> "ToolDefinition":
@@ -167,11 +172,16 @@ def create_note_finding_tool() -> "ToolDefinition":
                         "required": ["text", "source"],
                     },
                 },
+                "finding_type": {
+                    "type": "string",
+                    "enum": ["hypothesis", "supporting", "opposing"],
+                    "description": "Type of finding: hypothesis (proposed answer), supporting (evidence for), opposing (evidence against)",
+                },
             },
             "required": ["claim", "confidence", "evidence"],
         },
-        execute=lambda claim, confidence, evidence: note_finding(
-            claim, confidence, evidence
+        execute=lambda claim, confidence, evidence, finding_type=None: note_finding(
+            claim, confidence, evidence, finding_type=finding_type
         ),
     )
 

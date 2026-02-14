@@ -3,7 +3,8 @@
  */
 
 import { create } from 'zustand';
-import type { Cycle, ActiveCycle, WinterFoxEvent } from '../types/api';
+import type { Cycle, CycleDetail, ActiveCycle, WinterFoxEvent } from '../types/api';
+import { api } from '../services/api';
 
 interface CycleState {
   // State
@@ -11,6 +12,8 @@ interface CycleState {
   recentCycles: Cycle[];
   events: WinterFoxEvent[];
   maxEvents: number;
+  selectedCycleDetail: CycleDetail | null;
+  cycleDetailLoading: boolean;
 
   // Actions
   setActiveCycle: (cycle: ActiveCycle | null) => void;
@@ -18,6 +21,10 @@ interface CycleState {
   addEvent: (event: WinterFoxEvent) => void;
   clearEvents: () => void;
   handleEvent: (event: WinterFoxEvent) => void;
+
+  // Async actions
+  loadCycleDetail: (cycleId: number) => Promise<void>;
+  clearCycleDetail: () => void;
 }
 
 export const useCycleStore = create<CycleState>((set) => ({
@@ -25,7 +32,9 @@ export const useCycleStore = create<CycleState>((set) => ({
   activeCycle: null,
   recentCycles: [],
   events: [],
-  maxEvents: 100, // Keep last 100 events
+  maxEvents: 100,
+  selectedCycleDetail: null,
+  cycleDetailLoading: false,
 
   // Actions
   setActiveCycle: (cycle) => set({ activeCycle: cycle }),
@@ -42,10 +51,8 @@ export const useCycleStore = create<CycleState>((set) => ({
 
   handleEvent: (event) =>
     set((state) => {
-      // Add to events list
       const newEvents = [event, ...state.events].slice(0, state.maxEvents);
 
-      // Update active cycle based on event type
       let newActiveCycle = state.activeCycle;
 
       switch (event.type) {
@@ -88,4 +95,18 @@ export const useCycleStore = create<CycleState>((set) => ({
         activeCycle: newActiveCycle,
       };
     }),
+
+  // Async actions
+  loadCycleDetail: async (cycleId: number) => {
+    set({ cycleDetailLoading: true });
+    try {
+      const detail = await api.getCycle(cycleId);
+      set({ selectedCycleDetail: detail, cycleDetailLoading: false });
+    } catch (error) {
+      console.error('Failed to load cycle detail:', error);
+      set({ cycleDetailLoading: false });
+    }
+  },
+
+  clearCycleDetail: () => set({ selectedCycleDetail: null }),
 }));

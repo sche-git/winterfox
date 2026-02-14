@@ -63,6 +63,8 @@ def _format_node_markdown(
 
     # Metadata
     metadata_parts = []
+    if node.node_type:
+        metadata_parts.append(f"Type: {node.node_type}")
     if node.importance > 0.7:
         metadata_parts.append(f"**Important** ({node.importance:.0%})")
     if node.depth > 0:

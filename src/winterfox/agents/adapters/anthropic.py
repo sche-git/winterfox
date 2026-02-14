@@ -370,6 +370,7 @@ tool for simple factual lookups or when you need structured results.
                             )
                             for e in inp.get("evidence", [])
                         ],
+                        finding_type=inp.get("finding_type"),
                     )
                 )
 

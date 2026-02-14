@@ -52,6 +52,11 @@ class KnowledgeNode(BaseModel):
     )
     depth: int = Field(default=0, ge=0, description="How many cycles have refined this node")
 
+    # Node semantics
+    node_type: Literal["question", "hypothesis", "supporting", "opposing"] | None = Field(
+        default=None, description="Semantic role in hypothesis tree (None for legacy nodes)"
+    )
+
     # Status and relationships
     status: Literal["active", "killed", "merged", "speculative"] = Field(
         default="active", description="Current status of the node"
@@ -136,6 +141,7 @@ class NodeSummary(BaseModel):
     children_count: int
     staleness_hours: float
     status: str
+    node_type: str | None = None
 
     @classmethod
     def from_node(cls, node: KnowledgeNode) -> "NodeSummary":
@@ -148,4 +154,5 @@ class NodeSummary(BaseModel):
             children_count=len(node.children_ids),
             staleness_hours=node.staleness_hours,
             status=node.status,
+            node_type=node.node_type,
         )

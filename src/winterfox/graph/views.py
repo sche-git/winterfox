@@ -28,6 +28,17 @@ def _format_confidence(conf: float) -> str:
         return f"🔴 {conf:.2f}"
 
 
+def _get_type_indicator(node: "KnowledgeNode") -> str:
+    """Get type indicator prefix for hypothesis tree nodes."""
+    type_map = {
+        "question": "? ",
+        "hypothesis": "H ",
+        "supporting": "+ ",
+        "opposing": "- ",
+    }
+    return type_map.get(node.node_type, "") if node.node_type else ""
+
+
 def _get_status_indicator(node: "KnowledgeNode") -> str:
     """Get status indicator for a node."""
     indicators = []
@@ -120,11 +131,12 @@ async def _render_node_tree(
     claim_preview = node.claim[:60] + "..." if len(node.claim) > 60 else node.claim
 
     # Build node line
+    type_indicator = _get_type_indicator(node)
     conf_str = _format_confidence(node.confidence)
     status_str = _get_status_indicator(node)
     status_suffix = f" ({status_str})" if status_str else ""
 
-    node_line = f"{prefix}{connector}[{claim_preview}] conf:{conf_str} depth:{node.depth} children:{len(node.children_ids)}{status_suffix}"
+    node_line = f"{prefix}{connector}{type_indicator}[{claim_preview}] conf:{conf_str} depth:{node.depth} children:{len(node.children_ids)}{status_suffix}"
     lines.append(node_line)
 
     nodes_rendered += 1
@@ -203,6 +215,8 @@ async def render_focused_view(
     lines.append("🎯 Target Node:")
     lines.append(f"  ID: {node.id}")
     lines.append(f"  Claim: {node.claim}")
+    if node.node_type:
+        lines.append(f"  Type: {node.node_type}")
     lines.append(f"  Confidence: {_format_confidence(node.confidence)}")
     lines.append(f"  Importance: {node.importance:.2f}")
     lines.append(f"  Depth: {node.depth} cycles")

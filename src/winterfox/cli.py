@@ -666,6 +666,7 @@ async def _run_cycles(
             importance=1.0,
             depth=0,
             created_by_cycle=0,
+            node_type="question",
         )
 
     # Initialize agents
@@ -793,6 +794,8 @@ async def _run_cycles(
     search_instructions = config.get_search_instructions(config_path.parent)
     context_files = config.get_context_files_content(config_path.parent)
 
+    raw_output_dir = config_path.parent / config.storage.raw_output_dir
+
     orchestrator = Orchestrator(
         graph=graph,
         agent_pool=agent_pool,
@@ -803,6 +806,7 @@ async def _run_cycles(
         consensus_boost=config.orchestrator.consensus_boost,
         search_instructions=search_instructions,
         context_files=context_files,
+        raw_output_dir=raw_output_dir,
     )
 
     # Run cycles with progress
