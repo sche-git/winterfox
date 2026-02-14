@@ -1,0 +1,80 @@
+.stats-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.stat-card {
+  background: white;
+  border-radius: 8px;
+  padding: 1.5rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  transition: transform 0.2s, box-shadow 0.2s;
+  border-left: 4px solid;
+}
+
+.stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.stat-value {
+  font-size: 2rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+
+.stat-title {
+  font-size: 0.9rem;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.stat-card-blue {
+  border-left-color: #3b82f6;
+}
+
+.stat-card-blue .stat-value {
+  color: #3b82f6;
+}
+
+.stat-card-green {
+  border-left-color: #10b981;
+}
+
+.stat-card-green .stat-value {
+  color: #10b981;
+}
+
+.stat-card-yellow {
+  border-left-color: #f59e0b;
+}
+
+.stat-card-yellow .stat-value {
+  color: #f59e0b;
+}
+
+.stat-card-red {
+  border-left-color: #ef4444;
+}
+
+.stat-card-red .stat-value {
+  color: #ef4444;
+}
+
+.stat-card-purple {
+  border-left-color: #8b5cf6;
+}
+
+.stat-card-purple .stat-value {
+  color: #8b5cf6;
+}
+
+.stat-card-gray {
+  border-left-color: #6b7280;
+}
+
+.stat-card-gray .stat-value {
+  color: #6b7280;
+}

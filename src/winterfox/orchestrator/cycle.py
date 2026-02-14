@@ -12,8 +12,9 @@ A research cycle:
 
 import logging
 import time
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..agents.pool import AgentPool, SynthesisResult
@@ -22,6 +23,9 @@ if TYPE_CHECKING:
     from ..graph.store import KnowledgeGraph
 
 logger = logging.getLogger(__name__)
+
+# Type alias for event callback
+EventCallback = Callable[[dict[str, Any]], Coroutine[Any, Any, None]]
 
 
 @dataclass
@@ -54,6 +58,7 @@ class ResearchCycle:
         cycle_id: int,
         search_instructions: str | None = None,
         context_files: list[dict[str, str]] | None = None,
+        event_callback: EventCallback | None = None,
     ):
         """
         Initialize research cycle.
@@ -66,6 +71,7 @@ class ResearchCycle:
             cycle_id: Current cycle number
             search_instructions: Optional custom search guidance
             context_files: Optional prior research documents
+            event_callback: Optional async callback for real-time events
         """
         self.graph = graph
         self.agent_pool = agent_pool
@@ -75,6 +81,22 @@ class ResearchCycle:
         self.search_instructions = search_instructions
         self.context_files = context_files or []
         self.last_selected_id: str | None = None
+
+        # Event callback for real-time updates
+        self.event_callback = event_callback
+
+    async def _emit_event(self, event: dict[str, Any]) -> None:
+        """
+        Emit event if callback is registered.
+
+        Args:
+            event: Event data to emit
+        """
+        if self.event_callback:
+            try:
+                await self.event_callback(event)
+            except Exception as e:
+                logger.warning(f"Event callback failed: {e}")
 
     async def execute(
         self,
@@ -101,6 +123,15 @@ class ResearchCycle:
 
         try:
             # Step 1: Select target node
+            await self._emit_event({
+                "type": "cycle.step",
+                "data": {
+                    "cycle_id": self.cycle_id,
+                    "step": "node_selection",
+                    "progress_percent": 10,
+                }
+            })
+
             if target_node_id:
                 target = await self.graph.get_node(target_node_id)
                 if not target:
@@ -117,7 +148,25 @@ class ResearchCycle:
                 f"(conf={target.confidence:.2f}, depth={target.depth})"
             )
 
+            # Emit cycle started event
+            await self._emit_event({
+                "type": "cycle.started",
+                "data": {
+                    "cycle_id": self.cycle_id,
+                    "focus_node_id": target.id,
+                    "focus_claim": target.claim,
+                }
+            })
+
             # Step 2: Generate prompts
+            await self._emit_event({
+                "type": "cycle.step",
+                "data": {
+                    "cycle_id": self.cycle_id,
+                    "step": "prompt_generation",
+                    "progress_percent": 20,
+                }
+            })
             system_prompt, user_prompt = await generate_research_prompt(
                 self.graph,
                 target,
@@ -128,11 +177,31 @@ class ResearchCycle:
             )
 
             # Step 3: Dispatch agents
+            await self._emit_event({
+                "type": "cycle.step",
+                "data": {
+                    "cycle_id": self.cycle_id,
+                    "step": "agent_dispatch",
+                    "progress_percent": 30,
+                }
+            })
+
             if use_consensus and len(self.agent_pool.adapters) > 1:
                 # Multi-agent with LLM synthesis
                 logger.info(
                     f"Dispatching {len(self.agent_pool.adapters)} agents with LLM synthesis"
                 )
+
+                # Emit agent started events
+                for adapter in self.agent_pool.adapters:
+                    await self._emit_event({
+                        "type": "agent.started",
+                        "data": {
+                            "cycle_id": self.cycle_id,
+                            "agent_name": adapter.name,
+                            "prompt_preview": user_prompt[:200],
+                        }
+                    })
 
                 result: "SynthesisResult" = await self.agent_pool.dispatch_with_synthesis(
                     system_prompt,
@@ -141,15 +210,58 @@ class ResearchCycle:
                     max_iterations=30,
                 )
 
+                # Emit agent completed events
+                for output in result.individual_outputs:
+                    await self._emit_event({
+                        "type": "agent.completed",
+                        "data": {
+                            "cycle_id": self.cycle_id,
+                            "agent_name": output.agent_name,
+                            "findings_count": len(output.findings),
+                            "cost_usd": output.cost_usd,
+                            "duration_seconds": output.duration_seconds,
+                        }
+                    })
+
+                # Emit synthesis started
+                await self._emit_event({
+                    "type": "synthesis.started",
+                    "data": {
+                        "cycle_id": self.cycle_id,
+                        "agent_count": len(self.agent_pool.adapters),
+                    }
+                })
+
                 findings = result.findings
                 agent_outputs = result.individual_outputs
                 total_cost = result.total_cost_usd
                 consensus_count = len(result.consensus_findings)
                 divergent_count = len(findings) - consensus_count
 
+                # Emit synthesis completed
+                await self._emit_event({
+                    "type": "synthesis.completed",
+                    "data": {
+                        "cycle_id": self.cycle_id,
+                        "consensus_count": consensus_count,
+                        "divergent_count": divergent_count,
+                    }
+                })
+
             else:
                 # Single agent or parallel without consensus
                 logger.info("Dispatching single agent (no consensus)")
+
+                # Emit agent started events
+                for adapter in self.agent_pool.adapters:
+                    await self._emit_event({
+                        "type": "agent.started",
+                        "data": {
+                            "cycle_id": self.cycle_id,
+                            "agent_name": adapter.name,
+                            "prompt_preview": user_prompt[:200],
+                        }
+                    })
 
                 outputs = await self.agent_pool.dispatch(
                     system_prompt,
@@ -157,6 +269,19 @@ class ResearchCycle:
                     self.tools,
                     max_iterations=30,
                 )
+
+                # Emit agent completed events
+                for output in outputs:
+                    await self._emit_event({
+                        "type": "agent.completed",
+                        "data": {
+                            "cycle_id": self.cycle_id,
+                            "agent_name": output.agent_name,
+                            "findings_count": len(output.findings),
+                            "cost_usd": output.cost_usd,
+                            "duration_seconds": output.duration_seconds,
+                        }
+                    })
 
                 # Combine findings from all agents
                 findings = []
@@ -174,6 +299,15 @@ class ResearchCycle:
             )
 
             # Step 4: Merge findings into graph
+            await self._emit_event({
+                "type": "cycle.step",
+                "data": {
+                    "cycle_id": self.cycle_id,
+                    "step": "merge_findings",
+                    "progress_percent": 70,
+                }
+            })
+
             merge_stats = await merge_findings_into_graph(
                 self.graph,
                 findings,
@@ -184,6 +318,15 @@ class ResearchCycle:
             )
 
             # Step 5: Deduplicate subtree (consolidate redundant findings)
+            await self._emit_event({
+                "type": "cycle.step",
+                "data": {
+                    "cycle_id": self.cycle_id,
+                    "step": "deduplication",
+                    "progress_percent": 90,
+                }
+            })
+
             await merge_and_deduplicate_subtree(
                 self.graph,
                 target.id,
@@ -214,12 +357,34 @@ class ResearchCycle:
                 f"{merge_stats['created']} created, {merge_stats['updated']} updated"
             )
 
+            # Emit cycle completed event
+            await self._emit_event({
+                "type": "cycle.completed",
+                "data": {
+                    "cycle_id": self.cycle_id,
+                    "findings_created": merge_stats["created"],
+                    "findings_updated": merge_stats["updated"],
+                    "total_cost_usd": total_cost,
+                    "duration_seconds": duration,
+                }
+            })
+
             return result
 
         except Exception as e:
             logger.error(f"[Cycle {self.cycle_id}] Failed: {e}", exc_info=True)
 
             duration = time.time() - start_time
+
+            # Emit cycle failed event
+            await self._emit_event({
+                "type": "cycle.failed",
+                "data": {
+                    "cycle_id": self.cycle_id,
+                    "error_message": str(e),
+                    "step": "unknown",  # TODO: Track current step
+                }
+            })
 
             return CycleResult(
                 cycle_id=self.cycle_id,

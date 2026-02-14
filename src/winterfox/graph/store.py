@@ -154,6 +154,85 @@ SCHEMA_STATEMENTS = [
     """,
 
     "CREATE INDEX IF NOT EXISTS idx_usage_workspace ON usage_events(workspace_id, timestamp)",
+
+    # Cycle outputs table (for storing raw agent outputs and synthesis)
+    """
+    CREATE TABLE IF NOT EXISTS cycle_outputs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cycle_id INTEGER NOT NULL,
+        workspace_id TEXT NOT NULL DEFAULT 'default',
+        target_node_id TEXT NOT NULL,
+        target_claim TEXT NOT NULL,
+        synthesis_reasoning TEXT,
+        consensus_findings TEXT,
+        contradictions TEXT,
+        findings_created INTEGER DEFAULT 0,
+        findings_updated INTEGER DEFAULT 0,
+        findings_skipped INTEGER DEFAULT 0,
+        agent_count INTEGER NOT NULL,
+        total_tokens INTEGER NOT NULL,
+        total_cost_usd REAL NOT NULL,
+        duration_seconds REAL NOT NULL,
+        success INTEGER NOT NULL DEFAULT 1,
+        error_message TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+        FOREIGN KEY (target_node_id) REFERENCES nodes(id) ON DELETE SET NULL
+    )
+    """,
+
+    # Agent outputs table (normalized agent data)
+    """
+    CREATE TABLE IF NOT EXISTS agent_outputs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cycle_output_id INTEGER NOT NULL,
+        agent_name TEXT NOT NULL,
+        agent_model TEXT NOT NULL,
+        role TEXT NOT NULL,
+        findings TEXT NOT NULL,
+        self_critique TEXT NOT NULL,
+        searches_performed TEXT NOT NULL,
+        cost_usd REAL NOT NULL,
+        total_tokens INTEGER NOT NULL,
+        input_tokens INTEGER NOT NULL,
+        output_tokens INTEGER NOT NULL,
+        duration_seconds REAL NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (cycle_output_id) REFERENCES cycle_outputs(id) ON DELETE CASCADE
+    )
+    """,
+
+    # Cycle outputs indexes
+    "CREATE INDEX IF NOT EXISTS idx_cycle_outputs_workspace_time ON cycle_outputs(workspace_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_cycle_outputs_cycle ON cycle_outputs(cycle_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cycle_outputs_node ON cycle_outputs(target_node_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cycle_outputs_cost ON cycle_outputs(total_cost_usd)",
+    "CREATE INDEX IF NOT EXISTS idx_agent_outputs_cycle ON agent_outputs(cycle_output_id)",
+
+    # Full-text search for cycle outputs
+    """
+    CREATE VIRTUAL TABLE IF NOT EXISTS cycle_outputs_fts USING fts5(
+        id UNINDEXED,
+        workspace_id UNINDEXED,
+        synthesis_reasoning,
+        target_claim,
+        content=cycle_outputs
+    )
+    """,
+
+    # FTS triggers for cycle outputs
+    """
+    CREATE TRIGGER IF NOT EXISTS cycle_outputs_fts_insert AFTER INSERT ON cycle_outputs BEGIN
+        INSERT INTO cycle_outputs_fts(rowid, id, workspace_id, synthesis_reasoning, target_claim)
+        VALUES (new.rowid, new.id, new.workspace_id, new.synthesis_reasoning, new.target_claim);
+    END
+    """,
+
+    """
+    CREATE TRIGGER IF NOT EXISTS cycle_outputs_fts_delete AFTER DELETE ON cycle_outputs BEGIN
+        DELETE FROM cycle_outputs_fts WHERE rowid = old.rowid;
+    END
+    """,
 ]
 
 
@@ -189,6 +268,12 @@ class KnowledgeGraph:
         try:
             # Enable foreign keys
             await db.execute("PRAGMA foreign_keys = ON")
+
+            # Enable WAL mode for better read concurrency
+            # (allows simultaneous reads while writes are in progress)
+            if not self._is_memory:
+                await db.execute("PRAGMA journal_mode = WAL")
+                await db.execute("PRAGMA synchronous = NORMAL")
 
             # Execute each schema statement
             for statement in SCHEMA_STATEMENTS:
@@ -547,6 +632,455 @@ class KnowledgeGraph:
             row = await cursor.fetchone()
 
         return row[0] if row else 0
+
+    # --- Cycle Output Operations ---
+
+    async def save_cycle_output(
+        self,
+        cycle_id: int,
+        target_node: KnowledgeNode,
+        agent_outputs: list[Any],
+        synthesis_result: Any | None,
+        merge_stats: dict[str, int],
+        duration_seconds: float,
+        total_cost_usd: float,
+        success: bool = True,
+        error_message: str | None = None,
+    ) -> int:
+        """
+        Save complete cycle output to database.
+
+        Args:
+            cycle_id: Cycle ID
+            target_node: Target node that was researched
+            agent_outputs: List of AgentOutput objects
+            synthesis_result: SynthesisResult if multi-agent mode
+            merge_stats: Merge statistics (created, updated, skipped)
+            duration_seconds: Cycle duration
+            total_cost_usd: Total cost across all agents
+            success: Whether cycle succeeded
+            error_message: Optional error message
+
+        Returns:
+            cycle_output_id (int)
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        # Extract synthesis data
+        synthesis_reasoning = None
+        consensus_findings = []
+        contradictions = []
+
+        if synthesis_result:
+            synthesis_reasoning = synthesis_result.synthesis_reasoning
+            consensus_findings = synthesis_result.consensus_findings
+            contradictions = synthesis_result.contradictions
+
+        # Serialize data for storage
+        consensus_findings_json = json.dumps(consensus_findings) if consensus_findings else None
+        contradictions_json = json.dumps(contradictions) if contradictions else None
+
+        # Calculate total tokens
+        total_tokens = sum(output.total_tokens for output in agent_outputs)
+
+        async with self._get_db() as db:
+            # Insert cycle output
+            cursor = await db.execute(
+                """
+                INSERT INTO cycle_outputs (
+                    cycle_id, workspace_id, target_node_id, target_claim,
+                    synthesis_reasoning, consensus_findings, contradictions,
+                    findings_created, findings_updated, findings_skipped,
+                    agent_count, total_tokens, total_cost_usd, duration_seconds,
+                    success, error_message
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    cycle_id,
+                    self.workspace_id,
+                    target_node.id,
+                    target_node.claim,
+                    synthesis_reasoning,
+                    consensus_findings_json,
+                    contradictions_json,
+                    merge_stats.get("created", 0),
+                    merge_stats.get("updated", 0),
+                    merge_stats.get("skipped", 0),
+                    len(agent_outputs),
+                    total_tokens,
+                    total_cost_usd,
+                    duration_seconds,
+                    1 if success else 0,
+                    error_message,
+                ),
+            )
+
+            cycle_output_id = cursor.lastrowid
+
+            # Insert agent outputs
+            for i, output in enumerate(agent_outputs):
+                # Determine role (first is primary if multi-agent)
+                role = "primary" if i == 0 and len(agent_outputs) > 1 else "secondary"
+
+                # Serialize findings and searches
+                findings_json = self._serialize_agent_findings(output.findings)
+                searches_json = self._serialize_agent_searches(output.searches_performed)
+
+                await db.execute(
+                    """
+                    INSERT INTO agent_outputs (
+                        cycle_output_id, agent_name, agent_model, role,
+                        findings, self_critique, searches_performed,
+                        cost_usd, total_tokens, input_tokens, output_tokens,
+                        duration_seconds
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        cycle_output_id,
+                        output.agent_name,
+                        output.model,
+                        role,
+                        findings_json,
+                        output.self_critique,
+                        searches_json,
+                        output.cost_usd,
+                        output.total_tokens,
+                        output.input_tokens,
+                        output.output_tokens,
+                        output.duration_seconds,
+                    ),
+                )
+
+            await db.commit()
+
+        logger.debug(f"Saved cycle output {cycle_output_id} for cycle {cycle_id}")
+        return cycle_output_id
+
+    def _serialize_agent_findings(self, findings: list[Any]) -> str:
+        """Serialize agent findings to JSON."""
+        findings_data = []
+        for finding in findings:
+            finding_dict = {
+                "claim": finding.claim,
+                "confidence": finding.confidence,
+                "evidence": [
+                    {
+                        "text": e.text,
+                        "source": e.source,
+                        "date": e.date.isoformat() if hasattr(e.date, "isoformat") else str(e.date),
+                        "verified_by": e.verified_by,
+                    }
+                    for e in finding.evidence
+                ],
+                "tags": finding.tags,
+            }
+            findings_data.append(finding_dict)
+        return json.dumps(findings_data)
+
+    def _serialize_agent_searches(self, searches: list[Any]) -> str:
+        """Serialize agent searches to JSON."""
+        searches_data = []
+        for search in searches:
+            search_dict = {
+                "query": search.query,
+                "engine": search.engine,
+                "timestamp": search.timestamp.isoformat() if hasattr(search.timestamp, "isoformat") else str(search.timestamp),
+                "results_summary": getattr(search, "results_summary", ""),
+                "urls_visited": getattr(search, "urls_visited", []),
+            }
+            searches_data.append(search_dict)
+        return json.dumps(searches_data)
+
+    async def get_cycle_output(self, cycle_id: int) -> dict[str, Any] | None:
+        """
+        Get cycle output with all agent outputs.
+
+        Args:
+            cycle_id: Cycle ID to retrieve
+
+        Returns:
+            Dict with cycle data and agent outputs, or None if not found
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        async with self._get_db() as db:
+            # Get cycle output
+            cursor = await db.execute(
+                """
+                SELECT
+                    id, cycle_id, workspace_id, target_node_id, target_claim,
+                    synthesis_reasoning, consensus_findings, contradictions,
+                    findings_created, findings_updated, findings_skipped,
+                    agent_count, total_tokens, total_cost_usd, duration_seconds,
+                    success, error_message, created_at
+                FROM cycle_outputs
+                WHERE cycle_id = ? AND workspace_id = ?
+                """,
+                (cycle_id, self.workspace_id),
+            )
+            row = await cursor.fetchone()
+
+            if not row:
+                return None
+
+            # Parse cycle data
+            cycle_data = {
+                "id": row[0],
+                "cycle_id": row[1],
+                "workspace_id": row[2],
+                "target_node_id": row[3],
+                "target_claim": row[4],
+                "synthesis_reasoning": row[5],
+                "consensus_findings": json.loads(row[6]) if row[6] else [],
+                "contradictions": json.loads(row[7]) if row[7] else [],
+                "findings_created": row[8],
+                "findings_updated": row[9],
+                "findings_skipped": row[10],
+                "agent_count": row[11],
+                "total_tokens": row[12],
+                "total_cost_usd": row[13],
+                "duration_seconds": row[14],
+                "success": bool(row[15]),
+                "error_message": row[16],
+                "created_at": row[17],
+            }
+
+            # Get agent outputs
+            cursor = await db.execute(
+                """
+                SELECT
+                    agent_name, agent_model, role, findings, self_critique,
+                    searches_performed, cost_usd, total_tokens, input_tokens,
+                    output_tokens, duration_seconds
+                FROM agent_outputs
+                WHERE cycle_output_id = ?
+                ORDER BY id
+                """,
+                (cycle_data["id"],),
+            )
+            agent_rows = await cursor.fetchall()
+
+            agent_outputs = []
+            for agent_row in agent_rows:
+                agent_data = {
+                    "agent_name": agent_row[0],
+                    "agent_model": agent_row[1],
+                    "role": agent_row[2],
+                    "findings": json.loads(agent_row[3]),
+                    "self_critique": agent_row[4],
+                    "searches_performed": json.loads(agent_row[5]),
+                    "cost_usd": agent_row[6],
+                    "total_tokens": agent_row[7],
+                    "input_tokens": agent_row[8],
+                    "output_tokens": agent_row[9],
+                    "duration_seconds": agent_row[10],
+                }
+                agent_outputs.append(agent_data)
+
+            cycle_data["agent_outputs"] = agent_outputs
+            return cycle_data
+
+    async def list_cycle_outputs(
+        self,
+        workspace_id: str,
+        limit: int = 20,
+        offset: int = 0,
+        min_cost: float | None = None,
+        max_cost: float | None = None,
+        target_node_id: str | None = None,
+        success_only: bool = False,
+    ) -> list[dict[str, Any]]:
+        """
+        List cycle outputs with filtering.
+
+        Args:
+            workspace_id: Workspace ID
+            limit: Maximum results
+            offset: Offset for pagination
+            min_cost: Minimum cost filter
+            max_cost: Maximum cost filter
+            target_node_id: Filter by target node
+            success_only: Only show successful cycles
+
+        Returns:
+            List of cycle output dicts
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        # Build query with filters
+        filters = ["workspace_id = ?"]
+        params: list[Any] = [workspace_id]
+
+        if min_cost is not None:
+            filters.append("total_cost_usd >= ?")
+            params.append(min_cost)
+
+        if max_cost is not None:
+            filters.append("total_cost_usd <= ?")
+            params.append(max_cost)
+
+        if target_node_id:
+            filters.append("target_node_id = ?")
+            params.append(target_node_id)
+
+        if success_only:
+            filters.append("success = 1")
+
+        where_clause = " AND ".join(filters)
+        params.extend([limit, offset])
+
+        async with self._get_db() as db:
+            cursor = await db.execute(
+                f"""
+                SELECT
+                    cycle_id, workspace_id, target_node_id, target_claim,
+                    findings_created, findings_updated, findings_skipped,
+                    agent_count, total_tokens, total_cost_usd, duration_seconds,
+                    success, error_message, created_at
+                FROM cycle_outputs
+                WHERE {where_clause}
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                tuple(params),
+            )
+            rows = await cursor.fetchall()
+
+        results = []
+        for row in rows:
+            results.append({
+                "cycle_id": row[0],
+                "workspace_id": row[1],
+                "target_node_id": row[2],
+                "target_claim": row[3],
+                "findings_created": row[4],
+                "findings_updated": row[5],
+                "findings_skipped": row[6],
+                "agent_count": row[7],
+                "total_tokens": row[8],
+                "total_cost_usd": row[9],
+                "duration_seconds": row[10],
+                "success": bool(row[11]),
+                "error_message": row[12],
+                "created_at": row[13],
+            })
+
+        return results
+
+    async def search_cycle_outputs(
+        self,
+        query: str,
+        workspace_id: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """
+        Full-text search on synthesis reasoning and claims.
+
+        Args:
+            query: Search query
+            workspace_id: Workspace ID
+            limit: Maximum results
+
+        Returns:
+            List of matching cycle outputs
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        async with self._get_db() as db:
+            cursor = await db.execute(
+                """
+                SELECT
+                    co.cycle_id, co.workspace_id, co.target_node_id, co.target_claim,
+                    co.findings_created, co.findings_updated, co.findings_skipped,
+                    co.agent_count, co.total_tokens, co.total_cost_usd, co.duration_seconds,
+                    co.success, co.error_message, co.created_at
+                FROM cycle_outputs co
+                JOIN cycle_outputs_fts fts ON co.rowid = fts.rowid
+                WHERE fts MATCH ? AND co.workspace_id = ?
+                ORDER BY rank
+                LIMIT ?
+                """,
+                (query, workspace_id, limit),
+            )
+            rows = await cursor.fetchall()
+
+        results = []
+        for row in rows:
+            results.append({
+                "cycle_id": row[0],
+                "workspace_id": row[1],
+                "target_node_id": row[2],
+                "target_claim": row[3],
+                "findings_created": row[4],
+                "findings_updated": row[5],
+                "findings_skipped": row[6],
+                "agent_count": row[7],
+                "total_tokens": row[8],
+                "total_cost_usd": row[9],
+                "duration_seconds": row[10],
+                "success": bool(row[11]),
+                "error_message": row[12],
+                "created_at": row[13],
+            })
+
+        return results
+
+    async def delete_old_cycle_outputs(
+        self,
+        workspace_id: str,
+        retention_days: int = 90,
+    ) -> int:
+        """
+        Delete cycle outputs older than retention period.
+
+        Args:
+            workspace_id: Workspace ID
+            retention_days: Days to keep (0 = keep forever)
+
+        Returns:
+            Number of deleted cycles
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        if retention_days == 0:
+            return 0  # Keep forever
+
+        from datetime import datetime, timedelta
+
+        cutoff_date = datetime.now() - timedelta(days=retention_days)
+        cutoff_str = cutoff_date.isoformat()
+
+        async with self._get_db() as db:
+            # Count how many will be deleted
+            cursor = await db.execute(
+                """
+                SELECT COUNT(*) FROM cycle_outputs
+                WHERE workspace_id = ? AND created_at < ?
+                """,
+                (workspace_id, cutoff_str),
+            )
+            count_row = await cursor.fetchone()
+            delete_count = count_row[0] if count_row else 0
+
+            if delete_count > 0:
+                # Delete old cycle outputs (CASCADE will delete agent_outputs)
+                await db.execute(
+                    """
+                    DELETE FROM cycle_outputs
+                    WHERE workspace_id = ? AND created_at < ?
+                    """,
+                    (workspace_id, cutoff_str),
+                )
+                await db.commit()
+
+                logger.info(f"Deleted {delete_count} old cycle outputs from workspace {workspace_id}")
+
+        return delete_count
 
     async def close(self) -> None:
         """Close database connection (important for in-memory databases)."""

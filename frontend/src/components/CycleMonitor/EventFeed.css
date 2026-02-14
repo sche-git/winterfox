@@ -1,0 +1,124 @@
+.event-feed {
+  background: white;
+  border-radius: 8px;
+  padding: 1.5rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.event-feed h3 {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  color: #1f2937;
+}
+
+.events-list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  flex: 1;
+}
+
+.no-events {
+  text-align: center;
+  padding: 2rem 1rem;
+  color: #6b7280;
+}
+
+.no-events p {
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.event-item {
+  padding: 0.75rem;
+  border-radius: 6px;
+  border-left: 3px solid;
+  background: #f9fafb;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.event-item:hover {
+  transform: translateX(2px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.event-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.event-icon {
+  font-size: 1rem;
+}
+
+.event-type {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex: 1;
+}
+
+.event-time {
+  font-size: 0.7rem;
+  color: #6b7280;
+}
+
+.event-message {
+  font-size: 0.85rem;
+  color: #374151;
+  line-height: 1.4;
+}
+
+/* Color variants for different event types */
+.event-blue {
+  border-left-color: #3b82f6;
+  background: #eff6ff;
+}
+
+.event-blue .event-type {
+  color: #3b82f6;
+}
+
+.event-green {
+  border-left-color: #10b981;
+  background: #f0fdf4;
+}
+
+.event-green .event-type {
+  color: #10b981;
+}
+
+.event-red {
+  border-left-color: #ef4444;
+  background: #fef2f2;
+}
+
+.event-red .event-type {
+  color: #ef4444;
+}
+
+.event-cyan {
+  border-left-color: #06b6d4;
+  background: #ecfeff;
+}
+
+.event-cyan .event-type {
+  color: #06b6d4;
+}
+
+.event-gray {
+  border-left-color: #6b7280;
+  background: #f9fafb;
+}
+
+.event-gray .event-type {
+  color: #6b7280;
+}

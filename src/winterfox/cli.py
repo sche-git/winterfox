@@ -1100,6 +1100,122 @@ async def _interactive_mode(config_path: Path) -> None:
         # else continue (default)
 
 
+@app.command()
+def serve(
+    port: int = typer.Option(8000, "--port", "-p", help="Port to serve on"),
+    host: str = typer.Option("127.0.0.1", "--host", "-H", help="Host to bind to"),
+    config: Path = typer.Option(Path("winterfox.toml"), "--config", "-c", help="Config file path"),
+    reload: bool = typer.Option(False, "--reload", help="Auto-reload on code changes (dev mode)"),
+    open_browser: bool = typer.Option(False, "--open/--no-open", help="Open browser automatically"),
+    log_level: str = typer.Option("INFO", "--log-level", "-l", help="Log level"),
+) -> None:
+    """
+    Launch web dashboard.
+
+    Starts a local web server with:
+    - REST API at http://localhost:8000/api
+    - Interactive API docs at http://localhost:8000/api/docs
+    - Web UI at http://localhost:8000 (when frontend is built)
+
+    Example:
+        winterfox serve
+        winterfox serve --port 8080 --open  # Auto-open browser
+        winterfox serve --reload  # Development mode
+    """
+    setup_logging(level=log_level)
+
+    try:
+        _serve_dashboard(config, host, port, reload, open_browser, log_level)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Server stopped[/yellow]")
+        raise typer.Exit(0)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+
+def _serve_dashboard(
+    config_path: Path,
+    host: str,
+    port: int,
+    reload: bool,
+    open_browser: bool,
+    log_level: str,
+) -> None:
+    """Start the dashboard server."""
+    try:
+        import uvicorn
+    except ImportError:
+        console.print(
+            "[red]Error:[/red] FastAPI dependencies not installed.\n"
+            "Run: pip install fastapi uvicorn[standard] websockets"
+        )
+        raise typer.Exit(1)
+
+    from .web.server import create_app
+
+    # Load configuration
+    try:
+        cfg = load_config(config_path)
+    except FileNotFoundError:
+        console.print(
+            f"[red]Error:[/red] Configuration file not found: {config_path}\n"
+            "Run 'winterfox init' to create one."
+        )
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] Failed to load config: {e}")
+        raise typer.Exit(1)
+
+    db_path = str(cfg.storage.db_path)
+    workspace_id = cfg.multi_tenancy.workspace_id
+
+    # Check if database exists
+    if not Path(db_path).exists():
+        console.print(
+            f"[yellow]Warning:[/yellow] Database not found: {db_path}\n"
+            "Run 'winterfox run' to start research first."
+        )
+
+    # Show startup message
+    console.print(Panel.fit(
+        f"[green]Starting dashboard...[/green]\n\n"
+        f"Project: [bold]{cfg.project.name}[/bold]\n"
+        f"URL: http://{host}:{port}\n"
+        f"API Docs: http://{host}:{port}/api/docs\n"
+        f"Database: {db_path}\n"
+        f"Workspace: {workspace_id}",
+        title="Winterfox Dashboard",
+        border_style="blue",
+    ))
+
+    # Open browser after short delay
+    if open_browser:
+        import threading
+        import webbrowser
+
+        def open_in_browser():
+            import time
+            time.sleep(1.5)  # Wait for server to start
+            url = f"http://{host}:{port}"
+            console.print(f"[dim]Opening browser: {url}[/dim]")
+            webbrowser.open(url)
+
+        threading.Thread(target=open_in_browser, daemon=True).start()
+
+    # Create and run app
+    app = create_app(config_path, db_path, workspace_id)
+
+    # Run server
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        log_level=log_level.lower(),
+        access_log=True,
+    )
+
+
 def main() -> None:
     """CLI entry point."""
     app()

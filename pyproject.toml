@@ -42,6 +42,10 @@ dependencies = [
     "tiktoken>=0.7.0",            # Token counting for OpenAI models
     "platformdirs>=4.2.0",        # Cross-platform config directories
     "tomli>=2.4.0",
+    # Web dashboard dependencies
+    "fastapi>=0.109.0",           # Web framework for dashboard API
+    "uvicorn[standard]>=0.27.0",  # ASGI server with WebSocket support
+    "websockets>=12.0",           # WebSocket protocol for real-time updates
 ]
 
 [project.optional-dependencies]
