@@ -35,7 +35,7 @@ class KnowledgeNode(BaseModel):
     parent_id: str | None = Field(default=None, description="Parent node ID (None for root)")
 
     # Content
-    claim: str = Field(..., min_length=1, max_length=2000, description="The claim text")
+    claim: str = Field(..., min_length=1, description="The claim text")
 
     # Metrics
     confidence: float = Field(
