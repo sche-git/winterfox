@@ -1,13 +1,13 @@
 """
-Research cycle execution logic.
+Research cycle execution logic for Lead LLM architecture.
 
-A research cycle:
-1. Selects a target node to research
-2. Generates research prompts
-3. Dispatches agents (with consensus if multi-agent)
-4. Merges findings into graph
-5. Propagates confidence changes
-6. Deduplicates subtree
+A research cycle with Lead LLM:
+1. Lead LLM selects direction (or user-specified)
+2. Check report regeneration (auto-regenerate every N cycles)
+3. Lead LLM dispatches research agents
+4. Lead LLM synthesizes directions from raw outputs
+5. Merge directions into graph
+6. Deduplicate subtree
 """
 
 from __future__ import annotations
@@ -20,11 +20,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ..agents.pool import AgentPool, SynthesisResult
     from ..agents.protocol import AgentAdapter, AgentOutput, ToolDefinition
     from ..graph.models import KnowledgeNode
     from ..graph.store import KnowledgeGraph
-    from .selection import SelectionDecision
+    from .lead import LeadLLM, DirectionSynthesis
 
 logger = logging.getLogger(__name__)
 
@@ -34,63 +33,69 @@ EventCallback = Callable[[dict[str, Any]], Coroutine[Any, Any, None]]
 
 @dataclass
 class CycleResult:
-    """Result of a single research cycle."""
+    """Result of a single research cycle with Lead LLM architecture."""
 
     cycle_id: int
     target_node_id: str
     target_claim: str
-    findings_created: int
-    findings_updated: int
-    consensus_findings: int
-    divergent_findings: int
+    directions_created: int
+    directions_updated: int
+    consensus_directions: list[str]
+    contradictions: list[str]
     total_cost_usd: float
+    lead_llm_cost_usd: float
+    research_cost_usd: float
     duration_seconds: float
     agent_outputs: list["AgentOutput"]
+    synthesis_reasoning: str | None
+    selection_reasoning: str | None
     success: bool
     error_message: str | None = None
 
 
 class ResearchCycle:
-    """Executes a single research cycle."""
+    """Executes a single research cycle with Lead LLM architecture."""
 
     def __init__(
         self,
         graph: "KnowledgeGraph",
-        agent_pool: "AgentPool",
+        lead_llm: "LeadLLM",
+        research_agents: list["AgentAdapter"],
         tools: list["ToolDefinition"],
         north_star: str,
         cycle_id: int,
+        report_interval: int = 10,
         search_instructions: str | None = None,
         context_files: list[dict[str, str]] | None = None,
         event_callback: EventCallback | None = None,
         raw_output_dir: Path | None = None,
-        selection_adapter: "AgentAdapter | None" = None,
     ):
         """
-        Initialize research cycle.
+        Initialize research cycle with Lead LLM architecture.
 
         Args:
             graph: Knowledge graph
-            agent_pool: Agent pool for research
+            lead_llm: Lead LLM for orchestration
+            research_agents: Research agent adapters
             tools: Available tools for agents
             north_star: Project mission/north star
             cycle_id: Current cycle number
+            report_interval: Regenerate report every N cycles (default: 10)
             search_instructions: Optional custom search guidance
             context_files: Optional prior research documents
             event_callback: Optional async callback for real-time events
             raw_output_dir: Directory for markdown cycle exports
-            selection_adapter: Optional LLM adapter for intelligent node selection
         """
         self.graph = graph
-        self.agent_pool = agent_pool
+        self.lead_llm = lead_llm
+        self.research_agents = research_agents
         self.tools = tools
         self.north_star = north_star
         self.cycle_id = cycle_id
+        self.report_interval = report_interval
         self.search_instructions = search_instructions
         self.context_files = context_files or []
-        self.last_selected_id: str | None = None
         self.raw_output_dir = raw_output_dir
-        self.selection_adapter = selection_adapter
 
         # Event callback for real-time updates
         self.event_callback = event_callback
@@ -112,60 +117,49 @@ class ResearchCycle:
         self,
         target_node_id: str | None = None,
         max_searches: int = 25,
-        use_consensus: bool = True,
     ) -> CycleResult:
         """
-        Execute a single research cycle.
+        Execute a single research cycle with Lead LLM architecture.
 
         Args:
-            target_node_id: Specific node to research (or None for auto-select)
+            target_node_id: Specific node to research (or None for Lead LLM selection)
             max_searches: Maximum web searches per agent
-            use_consensus: Use multi-agent consensus (if pool has >1 agent)
 
         Returns:
-            CycleResult with stats and outputs
+            CycleResult with directions and cost tracking
         """
-        from .selection import select_target_node
-        from .prompts import generate_research_prompt
-        from .merge import merge_findings_into_graph, merge_and_deduplicate_subtree
+        from .merge_directions import merge_directions_into_graph, deduplicate_directions
 
         start_time = time.time()
 
         try:
-            # Step 1: Select target node
+            # ═══════════════════════════════════════════════════════════
+            # STEP 1: Lead LLM selects direction (10% progress)
+            # ═══════════════════════════════════════════════════════════
             await self._emit_event({
                 "type": "cycle.step",
                 "data": {
                     "cycle_id": self.cycle_id,
-                    "step": "node_selection",
+                    "step": "lead_selection",
                     "progress_percent": 10,
                 }
             })
 
-            selection_decision: "SelectionDecision | None" = None
-
             if target_node_id:
+                # User-specified target
                 target = await self.graph.get_node(target_node_id)
                 if not target:
                     raise ValueError(f"Target node {target_node_id} not found")
-            elif self.selection_adapter:
-                from .selection import select_target_with_llm
-                target, selection_decision = await select_target_with_llm(
-                    self.graph, self.selection_adapter, self.last_selected_id
-                )
-                if not target:
-                    raise ValueError("No nodes available for research")
+                selection_reasoning = "User-specified target"
             else:
-                target = await select_target_node(self.graph, self.last_selected_id)
-                if not target:
-                    raise ValueError("No nodes available for research")
-
-            self.last_selected_id = target.id
+                # Lead LLM selects direction autonomously
+                target, selection_reasoning = await self.lead_llm.select_direction()
 
             logger.info(
                 f"[Cycle {self.cycle_id}] Target: {target.claim[:60]}... "
-                f"(conf={target.confidence:.2f}, depth={target.depth})"
+                f"(conf={target.confidence:.2f}, imp={target.importance:.2f})"
             )
+            logger.info(f"[Cycle {self.cycle_id}] Reasoning: {selection_reasoning}")
 
             # Emit cycle started event
             await self._emit_event({
@@ -174,187 +168,112 @@ class ResearchCycle:
                     "cycle_id": self.cycle_id,
                     "focus_node_id": target.id,
                     "focus_claim": target.claim,
+                    "selection_reasoning": selection_reasoning,
                 }
             })
 
-            # Step 1.5: Build accumulated research context
-            from .research_context import ResearchContextBuilder
+            # ═══════════════════════════════════════════════════════════
+            # STEP 2: Check report regeneration (15% progress)
+            # ═══════════════════════════════════════════════════════════
+            if self.cycle_id % self.report_interval == 0:
+                await self._emit_event({
+                    "type": "cycle.step",
+                    "data": {
+                        "cycle_id": self.cycle_id,
+                        "step": "report_regeneration",
+                        "progress_percent": 15,
+                    }
+                })
 
-            context_builder = ResearchContextBuilder(self.graph)
-            research_ctx = await context_builder.build()
-            rendered_context = research_ctx.render() or None
+                logger.info(f"[Cycle {self.cycle_id}] Regenerating report for fresh context")
+                report_content = await self._regenerate_report()
+                self.lead_llm.report_content = report_content
 
-            if rendered_context:
-                logger.info(
-                    f"[Cycle {self.cycle_id}] Built research context: "
-                    f"{len(rendered_context)} chars from {research_ctx.total_prior_cycles} prior cycles"
-                )
-
-            # Step 2: Generate prompts
+            # ═══════════════════════════════════════════════════════════
+            # STEP 3: Lead LLM dispatches research (30% progress)
+            # ═══════════════════════════════════════════════════════════
             await self._emit_event({
                 "type": "cycle.step",
                 "data": {
                     "cycle_id": self.cycle_id,
-                    "step": "prompt_generation",
-                    "progress_percent": 20,
-                }
-            })
-            system_prompt, user_prompt = await generate_research_prompt(
-                self.graph,
-                target,
-                self.north_star,
-                max_searches,
-                search_instructions=self.search_instructions,
-                context_files=self.context_files,
-                research_context=rendered_context,
-                strategy=selection_decision.strategy if selection_decision else None,
-                selection_reasoning=selection_decision.reasoning if selection_decision else None,
-            )
-
-            # Step 3: Dispatch agents
-            await self._emit_event({
-                "type": "cycle.step",
-                "data": {
-                    "cycle_id": self.cycle_id,
-                    "step": "agent_dispatch",
+                    "step": "research_dispatch",
                     "progress_percent": 30,
                 }
             })
 
-            if use_consensus and len(self.agent_pool.adapters) > 1:
-                # Multi-agent with LLM synthesis
-                logger.info(
-                    f"Dispatching {len(self.agent_pool.adapters)} agents with LLM synthesis"
-                )
-
-                # Emit agent started events
-                for adapter in self.agent_pool.adapters:
-                    await self._emit_event({
-                        "type": "agent.started",
-                        "data": {
-                            "cycle_id": self.cycle_id,
-                            "agent_name": adapter.name,
-                            "prompt_preview": user_prompt[:200],
-                        }
-                    })
-
-                result: "SynthesisResult" = await self.agent_pool.dispatch_with_synthesis(
-                    system_prompt,
-                    user_prompt,
-                    self.tools,
-                    max_iterations=30,
-                )
-
-                # Emit agent completed events
-                for output in result.individual_outputs:
-                    await self._emit_event({
-                        "type": "agent.completed",
-                        "data": {
-                            "cycle_id": self.cycle_id,
-                            "agent_name": output.agent_name,
-                            "findings_count": len(output.findings),
-                            "cost_usd": output.cost_usd,
-                            "duration_seconds": output.duration_seconds,
-                        }
-                    })
-
-                # Emit synthesis started
-                await self._emit_event({
-                    "type": "synthesis.started",
-                    "data": {
-                        "cycle_id": self.cycle_id,
-                        "agent_count": len(self.agent_pool.adapters),
-                    }
-                })
-
-                findings = result.findings
-                agent_outputs = result.individual_outputs
-                total_cost = result.total_cost_usd
-                consensus_count = len(result.consensus_findings)
-                divergent_count = len(findings) - consensus_count
-                synthesis_result = result  # Store for later use
-
-                # Emit synthesis completed
-                await self._emit_event({
-                    "type": "synthesis.completed",
-                    "data": {
-                        "cycle_id": self.cycle_id,
-                        "consensus_count": consensus_count,
-                        "divergent_count": divergent_count,
-                    }
-                })
-
-            else:
-                # Single agent or parallel without consensus
-                logger.info("Dispatching single agent (no consensus)")
-
-                # Emit agent started events
-                for adapter in self.agent_pool.adapters:
-                    await self._emit_event({
-                        "type": "agent.started",
-                        "data": {
-                            "cycle_id": self.cycle_id,
-                            "agent_name": adapter.name,
-                            "prompt_preview": user_prompt[:200],
-                        }
-                    })
-
-                outputs = await self.agent_pool.dispatch(
-                    system_prompt,
-                    user_prompt,
-                    self.tools,
-                    max_iterations=30,
-                )
-
-                # Emit agent completed events
-                for output in outputs:
-                    await self._emit_event({
-                        "type": "agent.completed",
-                        "data": {
-                            "cycle_id": self.cycle_id,
-                            "agent_name": output.agent_name,
-                            "findings_count": len(output.findings),
-                            "cost_usd": output.cost_usd,
-                            "duration_seconds": output.duration_seconds,
-                        }
-                    })
-
-                # Combine findings from all agents
-                findings = []
-                for output in outputs:
-                    findings.extend(output.findings)
-
-                agent_outputs = outputs
-                total_cost = sum(o.cost_usd for o in outputs)
-                consensus_count = 0
-                divergent_count = len(findings)
-                synthesis_result = None  # No synthesis for single agent
-
             logger.info(
-                f"[Cycle {self.cycle_id}] Agents complete: {len(findings)} findings, "
-                f"${total_cost:.4f} cost"
+                f"[Cycle {self.cycle_id}] Dispatching {len(self.research_agents)} research agent(s)"
             )
 
-            # Step 4: Merge findings into graph
+            agent_outputs = await self.lead_llm.dispatch_research(
+                target_node=target,
+                research_agents=self.research_agents,
+                tools=self.tools,
+                max_searches=max_searches,
+            )
+
+            # Calculate costs
+            lead_llm_cost = sum(
+                output.cost_usd for output in agent_outputs
+                if output.agent_name == self.lead_llm.adapter.name
+            )
+            research_cost = sum(
+                output.cost_usd for output in agent_outputs
+                if output.agent_name != self.lead_llm.adapter.name
+            )
+
+            logger.info(
+                f"[Cycle {self.cycle_id}] Research complete: "
+                f"Lead ${lead_llm_cost:.4f}, Research ${research_cost:.4f}"
+            )
+
+            # ═══════════════════════════════════════════════════════════
+            # STEP 4: Lead LLM synthesizes directions (60% progress)
+            # ═══════════════════════════════════════════════════════════
             await self._emit_event({
                 "type": "cycle.step",
                 "data": {
                     "cycle_id": self.cycle_id,
-                    "step": "merge_findings",
-                    "progress_percent": 70,
+                    "step": "synthesis",
+                    "progress_percent": 60,
                 }
             })
 
-            merge_stats = await merge_findings_into_graph(
-                self.graph,
-                findings,
-                target.id,
-                self.cycle_id,
+            synthesis: DirectionSynthesis = await self.lead_llm.synthesize_directions(
+                agent_outputs=agent_outputs,
+                target_node=target,
+            )
+
+            logger.info(
+                f"[Cycle {self.cycle_id}] Synthesis: {len(synthesis.directions)} directions, "
+                f"{len(synthesis.consensus_directions)} consensus, "
+                f"{len(synthesis.contradictions)} contradictions"
+            )
+
+            # ═══════════════════════════════════════════════════════════
+            # STEP 5: Merge directions into graph (80% progress)
+            # ═══════════════════════════════════════════════════════════
+            await self._emit_event({
+                "type": "cycle.step",
+                "data": {
+                    "cycle_id": self.cycle_id,
+                    "step": "merge_directions",
+                    "progress_percent": 80,
+                }
+            })
+
+            merge_stats = await merge_directions_into_graph(
+                graph=self.graph,
+                directions=synthesis.directions,
+                target_node_id=target.id,
+                cycle_id=self.cycle_id,
                 similarity_threshold=0.75,
                 confidence_discount=0.7,
             )
 
-            # Step 5: Deduplicate subtree (consolidate redundant findings)
+            # ═══════════════════════════════════════════════════════════
+            # STEP 6: Deduplicate directions (90% progress)
+            # ═══════════════════════════════════════════════════════════
             await self._emit_event({
                 "type": "cycle.step",
                 "data": {
@@ -364,34 +283,45 @@ class ResearchCycle:
                 }
             })
 
-            await merge_and_deduplicate_subtree(
-                self.graph,
-                target.id,
-                self.cycle_id,
+            merged_count = await deduplicate_directions(
+                graph=self.graph,
+                parent_id=target.id,
+                cycle_id=self.cycle_id,
                 similarity_threshold=0.85,
             )
 
-            # Calculate duration
+            if merged_count > 0:
+                logger.info(f"[Cycle {self.cycle_id}] Deduplicated {merged_count} directions")
+
+            # ═══════════════════════════════════════════════════════════
+            # Calculate final stats
+            # ═══════════════════════════════════════════════════════════
             duration = time.time() - start_time
+            total_cost = lead_llm_cost + research_cost
 
             # Build result
             result = CycleResult(
                 cycle_id=self.cycle_id,
                 target_node_id=target.id,
                 target_claim=target.claim,
-                findings_created=merge_stats["created"],
-                findings_updated=merge_stats["updated"],
-                consensus_findings=consensus_count,
-                divergent_findings=divergent_count,
+                directions_created=merge_stats["created"],
+                directions_updated=merge_stats["updated"],
+                consensus_directions=synthesis.consensus_directions,
+                contradictions=synthesis.contradictions,
                 total_cost_usd=total_cost,
+                lead_llm_cost_usd=lead_llm_cost,
+                research_cost_usd=research_cost,
                 duration_seconds=duration,
                 agent_outputs=agent_outputs,
+                synthesis_reasoning=synthesis.synthesis_reasoning,
+                selection_reasoning=selection_reasoning,
                 success=True,
             )
 
             logger.info(
                 f"[Cycle {self.cycle_id}] Complete in {duration:.1f}s: "
-                f"{merge_stats['created']} created, {merge_stats['updated']} updated"
+                f"{merge_stats['created']} created, {merge_stats['updated']} updated, "
+                f"${total_cost:.4f} cost"
             )
 
             # Emit cycle completed event
@@ -399,6 +329,9 @@ class ResearchCycle:
                 "type": "cycle.completed",
                 "data": {
                     "cycle_id": self.cycle_id,
+                    "directions_created": merge_stats["created"],
+                    "directions_updated": merge_stats["updated"],
+                    # Legacy keys kept for dashboard/API compatibility.
                     "findings_created": merge_stats["created"],
                     "findings_updated": merge_stats["updated"],
                     "total_cost_usd": total_cost,
@@ -409,10 +342,9 @@ class ResearchCycle:
             # Save cycle output to database
             await self._save_cycle_output(
                 result=result,
-                synthesis_result=synthesis_result,
+                synthesis=synthesis,
                 merge_stats=merge_stats,
                 target=target,
-                selection_decision=selection_decision,
             )
 
             return result
@@ -428,7 +360,6 @@ class ResearchCycle:
                 "data": {
                     "cycle_id": self.cycle_id,
                     "error_message": str(e),
-                    "step": "unknown",  # TODO: Track current step
                 }
             })
 
@@ -436,34 +367,68 @@ class ResearchCycle:
                 cycle_id=self.cycle_id,
                 target_node_id=target.id if 'target' in locals() else "unknown",
                 target_claim=target.claim if 'target' in locals() else "unknown",
-                findings_created=0,
-                findings_updated=0,
-                consensus_findings=0,
-                divergent_findings=0,
+                directions_created=0,
+                directions_updated=0,
+                consensus_directions=[],
+                contradictions=[],
                 total_cost_usd=0.0,
+                lead_llm_cost_usd=0.0,
+                research_cost_usd=0.0,
                 duration_seconds=duration,
                 agent_outputs=[],
+                synthesis_reasoning=None,
+                selection_reasoning=None,
                 success=False,
                 error_message=str(e),
             )
 
+    async def _regenerate_report(self) -> str:
+        """
+        Regenerate research report for Lead LLM context.
+
+        Returns:
+            Markdown report content
+        """
+        try:
+            from .report import ReportSynthesizer
+
+            synthesizer = ReportSynthesizer(
+                graph=self.graph,
+                adapter=self.lead_llm.adapter,
+                north_star=self.north_star,
+            )
+
+            # Generate sync/async compatible
+            result = synthesizer.generate()
+            if hasattr(result, '__await__'):
+                result = await result
+
+            logger.info(
+                f"[Cycle {self.cycle_id}] Regenerated report: "
+                f"{result.node_count} nodes, {result.cycle_count} cycles"
+            )
+
+            return result.markdown
+
+        except Exception as e:
+            logger.warning(f"Report regeneration failed: {e}")
+            return ""
+
     async def _save_cycle_output(
         self,
         result: CycleResult,
-        synthesis_result: "SynthesisResult | None",
+        synthesis: "DirectionSynthesis",
         merge_stats: dict,
         target: "KnowledgeNode",
-        selection_decision: "SelectionDecision | None" = None,
     ) -> None:
         """
         Save cycle output to database and export to markdown.
 
         Args:
             result: CycleResult with all outputs
-            synthesis_result: SynthesisResult if multi-agent mode
+            synthesis: DirectionSynthesis from Lead LLM
             merge_stats: Merge statistics from graph integration
             target: Target node that was researched
-            selection_decision: LLM selection decision (strategy/reasoning)
         """
         try:
             # Save to database
@@ -471,14 +436,16 @@ class ResearchCycle:
                 cycle_id=self.cycle_id,
                 target_node=target,
                 agent_outputs=result.agent_outputs,
-                synthesis_result=synthesis_result,
+                synthesis_result=synthesis,
                 merge_stats=merge_stats,
                 duration_seconds=result.duration_seconds,
                 total_cost_usd=result.total_cost_usd,
+                lead_llm_cost_usd=result.lead_llm_cost_usd,
+                research_agents_cost_usd=result.research_cost_usd,
                 success=result.success,
                 error_message=result.error_message,
-                selection_strategy=selection_decision.strategy if selection_decision else None,
-                selection_reasoning=selection_decision.reasoning if selection_decision else None,
+                selection_strategy=None,  # Lead LLM makes strategic decisions
+                selection_reasoning=result.selection_reasoning,
             )
 
             logger.info(f"Saved cycle {self.cycle_id} output to database (id={cycle_output_id})")

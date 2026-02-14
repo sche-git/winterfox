@@ -256,6 +256,103 @@ class KnowledgeGraph:
         self._conn: aiosqlite.Connection | None = None  # Persistent connection for :memory:
         self._is_memory = self.db_path == ":memory:"
 
+    async def run_migrations(self) -> None:
+        """
+        Run database migrations from SQL files.
+
+        Migrations are tracked in a migrations table to ensure each migration
+        runs only once. Migration files are located in graph/migrations/ directory.
+        """
+        async with self._get_db() as db:
+            # Create migrations table if it doesn't exist
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS migrations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            await db.commit()
+
+            # Check which migrations have been applied
+            cursor = await db.execute("SELECT name FROM migrations")
+            applied = {row[0] for row in await cursor.fetchall()}
+
+            # Find migration files
+            migrations_dir = Path(__file__).parent / "migrations"
+            if not migrations_dir.exists():
+                logger.debug("No migrations directory found, skipping migrations")
+                return
+
+            migration_files = sorted(migrations_dir.glob("*.sql"))
+
+            # Apply missing migrations
+            for migration_file in migration_files:
+                if migration_file.name in applied:
+                    logger.debug(f"Migration {migration_file.name} already applied, skipping")
+                    continue
+
+                logger.info(f"Applying migration: {migration_file.name}")
+
+                try:
+                    # Read migration SQL
+                    sql = migration_file.read_text(encoding="utf-8")
+
+                    # Execute migration (SQLite doesn't support executescript in aiosqlite,
+                    # so we need to split and execute statements individually)
+                    # Split on semicolon but preserve transaction blocks
+                    statements = []
+                    current_statement = []
+                    in_transaction = False
+
+                    for line in sql.split('\n'):
+                        stripped = line.strip()
+
+                        # Skip comments and empty lines
+                        if not stripped or stripped.startswith('--'):
+                            continue
+
+                        # Track transaction blocks
+                        if stripped.upper().startswith('BEGIN'):
+                            in_transaction = True
+                        elif stripped.upper().startswith('COMMIT'):
+                            in_transaction = False
+
+                        current_statement.append(line)
+
+                        # Execute when we hit a semicolon outside a transaction
+                        # or when transaction ends
+                        if (stripped.endswith(';') and not in_transaction) or \
+                           (stripped.upper().startswith('COMMIT') and stripped.endswith(';')):
+                            stmt = '\n'.join(current_statement)
+                            if stmt.strip():
+                                statements.append(stmt)
+                            current_statement = []
+
+                    # Add any remaining statement
+                    if current_statement:
+                        stmt = '\n'.join(current_statement)
+                        if stmt.strip():
+                            statements.append(stmt)
+
+                    # Execute all statements
+                    for statement in statements:
+                        await db.execute(statement)
+
+                    # Record migration as applied
+                    await db.execute(
+                        "INSERT INTO migrations (name) VALUES (?)",
+                        (migration_file.name,)
+                    )
+                    await db.commit()
+
+                    logger.info(f"Migration {migration_file.name} completed successfully")
+
+                except Exception as e:
+                    logger.error(f"Migration {migration_file.name} failed: {e}")
+                    await db.rollback()
+                    raise RuntimeError(f"Database migration failed: {migration_file.name}") from e
+
     async def initialize(self) -> None:
         """Initialize database schema. Call this before any operations."""
         if self._initialized:
@@ -298,6 +395,10 @@ class KnowledgeGraph:
 
             self._initialized = True
             logger.info(f"Initialized knowledge graph at {self.db_path} for workspace {self.workspace_id}")
+
+            # Run SQL file migrations after schema is set up
+            await self.run_migrations()
+
         finally:
             # Only close if not keeping persistent connection
             if not self._is_memory:
@@ -659,6 +760,8 @@ class KnowledgeGraph:
         merge_stats: dict[str, int],
         duration_seconds: float,
         total_cost_usd: float,
+        lead_llm_cost_usd: float = 0.0,
+        research_agents_cost_usd: float = 0.0,
         success: bool = True,
         error_message: str | None = None,
         selection_strategy: str | None = None,
@@ -671,13 +774,15 @@ class KnowledgeGraph:
             cycle_id: Cycle ID
             target_node: Target node that was researched
             agent_outputs: List of AgentOutput objects
-            synthesis_result: SynthesisResult if multi-agent mode
+            synthesis_result: DirectionSynthesis from Lead LLM
             merge_stats: Merge statistics (created, updated, skipped)
             duration_seconds: Cycle duration
             total_cost_usd: Total cost across all agents
+            lead_llm_cost_usd: Cost for Lead LLM (selection + synthesis)
+            research_agents_cost_usd: Cost for research agents
             success: Whether cycle succeeded
             error_message: Optional error message
-            selection_strategy: LLM selection strategy (EXPLORE/DEEPEN/CHALLENGE)
+            selection_strategy: LLM selection strategy (if used)
             selection_reasoning: LLM selection reasoning
 
         Returns:
@@ -693,8 +798,14 @@ class KnowledgeGraph:
 
         if synthesis_result:
             synthesis_reasoning = synthesis_result.synthesis_reasoning
-            consensus_findings = synthesis_result.consensus_findings
-            contradictions = synthesis_result.contradictions
+            # Backward/forward compatibility:
+            # legacy synthesis used consensus_findings, current flow uses consensus_directions.
+            consensus_findings = getattr(
+                synthesis_result,
+                "consensus_findings",
+                getattr(synthesis_result, "consensus_directions", []),
+            )
+            contradictions = getattr(synthesis_result, "contradictions", [])
 
         # Serialize data for storage
         consensus_findings_json = json.dumps(consensus_findings) if consensus_findings else None
@@ -711,9 +822,11 @@ class KnowledgeGraph:
                     cycle_id, workspace_id, target_node_id, target_claim,
                     synthesis_reasoning, consensus_findings, contradictions,
                     findings_created, findings_updated, findings_skipped,
-                    agent_count, total_tokens, total_cost_usd, duration_seconds,
+                    agent_count, total_tokens, total_cost_usd,
+                    lead_llm_cost_usd, research_agents_cost_usd,
+                    duration_seconds,
                     success, error_message, selection_strategy, selection_reasoning
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     cycle_id,
@@ -729,6 +842,8 @@ class KnowledgeGraph:
                     len(agent_outputs),
                     total_tokens,
                     total_cost_usd,
+                    lead_llm_cost_usd,
+                    research_agents_cost_usd,
                     duration_seconds,
                     1 if success else 0,
                     error_message,
@@ -745,8 +860,12 @@ class KnowledgeGraph:
                 role = "primary" if i == 0 and len(agent_outputs) > 1 else "secondary"
 
                 # Serialize findings and searches
-                findings_json = self._serialize_agent_findings(output.findings)
-                searches_json = self._serialize_agent_searches(output.searches_performed)
+                findings_json = self._serialize_agent_findings(
+                    getattr(output, "findings", [])
+                )
+                searches_json = self._serialize_agent_searches(
+                    getattr(output, "searches_performed", [])
+                )
 
                 await db.execute(
                     """
@@ -783,19 +902,32 @@ class KnowledgeGraph:
         """Serialize agent findings to JSON."""
         findings_data = []
         for finding in findings:
+            if isinstance(finding, dict):
+                findings_data.append(finding)
+                continue
+
+            evidence_items = getattr(finding, "evidence", [])
             finding_dict = {
-                "claim": finding.claim,
-                "confidence": finding.confidence,
+                "claim": getattr(finding, "claim", ""),
+                "confidence": getattr(finding, "confidence", 0.0),
                 "evidence": [
                     {
-                        "text": e.text,
-                        "source": e.source,
-                        "date": e.date.isoformat() if hasattr(e.date, "isoformat") else str(e.date),
-                        "verified_by": e.verified_by,
+                        "text": e.get("text", "") if isinstance(e, dict) else getattr(e, "text", ""),
+                        "source": e.get("source", "") if isinstance(e, dict) else getattr(e, "source", ""),
+                        "date": (
+                            e.get("date", "")
+                            if isinstance(e, dict)
+                            else (
+                                e.date.isoformat()
+                                if hasattr(e, "date") and hasattr(e.date, "isoformat")
+                                else str(getattr(e, "date", ""))
+                            )
+                        ),
+                        "verified_by": e.get("verified_by", []) if isinstance(e, dict) else getattr(e, "verified_by", []),
                     }
-                    for e in finding.evidence
+                    for e in evidence_items
                 ],
-                "tags": finding.tags,
+                "tags": getattr(finding, "tags", []),
                 "finding_type": getattr(finding, "finding_type", None),
             }
             findings_data.append(finding_dict)

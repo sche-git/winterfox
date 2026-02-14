@@ -25,7 +25,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from ..protocol import AgentOutput, Evidence, Finding, SearchRecord, ToolDefinition
+from ..protocol import AgentOutput, Evidence, SearchRecord, ToolDefinition
 from .base import AgentAuthenticationError
 
 logger = logging.getLogger(__name__)
@@ -358,7 +358,6 @@ class OpenRouterAdapter:
 
         duration = (datetime.now() - start_time).total_seconds()
         cost_usd = self._calculate_cost(input_tokens, output_tokens)
-        findings = self._extract_findings(messages)
 
         final_message = messages[-1] if messages else {}
         self_critique = ""
@@ -368,13 +367,12 @@ class OpenRouterAdapter:
             self_critique = "No critique provided"
 
         return AgentOutput(
-            findings=findings,
-            self_critique=self_critique,
             raw_text="\n".join(
                 m.get("content", "")
                 for m in messages
                 if isinstance(m.get("content"), str)
             ),
+            self_critique=self_critique,
             searches_performed=searches_performed,
             cost_usd=cost_usd,
             duration_seconds=duration,
@@ -400,51 +398,6 @@ class OpenRouterAdapter:
         input_cost = (input_tokens / 1_000_000) * self._pricing["prompt"]
         output_cost = (output_tokens / 1_000_000) * self._pricing["completion"]
         return input_cost + output_cost
-
-    def _extract_findings(self, messages: list[dict]) -> list[Finding]:
-        """
-        Extract findings from note_finding tool calls across all messages.
-
-        Uses the same normalize_tool_calls path so embedded-in-content tool
-        calls are also captured.
-        """
-        findings = []
-
-        for msg in messages:
-            if msg.get("role") != "assistant":
-                continue
-
-            for tc in normalize_tool_calls(msg):
-                if tc.name != "note_finding":
-                    continue
-
-                try:
-                    args = tc.arguments
-                    evidence = [
-                        Evidence(
-                            text=ev.get("text", ""),
-                            source=ev.get("source", ""),
-                            date=datetime.now(),
-                            verified_by=[self.name],
-                        )
-                        for ev in args.get("evidence", [])
-                    ]
-
-                    findings.append(
-                        Finding(
-                            claim=args.get("claim", ""),
-                            confidence=args.get("confidence", 0.5),
-                            evidence=evidence,
-                            suggested_parent_id=args.get("suggested_parent_id"),
-                            suggested_children=args.get("suggested_children", []),
-                            tags=args.get("tags", []),
-                            finding_type=args.get("finding_type"),
-                        )
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to parse finding: {e}")
-
-        return findings
 
 
 async def fetch_openrouter_models(api_key: str | None = None) -> list[dict[str, Any]]:

@@ -1,0 +1,135 @@
+[project]
+name = "Quantum ML startup strategy"
+north_star = """
+## Who We Are
+**Superpose** — a quantum ML startup. We leverage **quantum computing** to accelerate AI workloads. Our fundamental thesis: quantum processors — both **gate-based** (IBM, Google, IonQ, Quantinuum, etc.) and **annealing-based** (D-Wave) — can solve problems that arise naturally in machine learning faster, better, or cheaper than classical methods. We are paradigm-agnostic: we go where the advantage is.
+
+## What We're Looking For
+We are searching for the right **market, product, and customers** for quantum-accelerated AI. We don't yet know exactly what the product looks like. That's what this research is for.
+
+## This Track's Mission
+
+**We are not asking "does quantum help ML?" anymore. We know the answer is currently no — for annealing at today's scale.**
+
+**We are asking: "How do we ENGINEER a path where quantum DOES help ML?" — across BOTH paradigms.**
+
+This is invention, not validation. We're looking for:
+- Creative formulations that bypass the three annealing barriers
+- Hardware advances (Advantage2, error correction, hybrid solvers) that change the annealing math
+- **Gate-based approaches**: variational quantum algorithms (VQE, QAOA), quantum kernel methods, quantum neural networks, quantum feature maps, amplitude estimation for sampling/generative tasks
+- Novel problem decompositions where quantum provides a genuine sub-routine advantage
+- Ways to reshape ML problems to fit quantum's sweet spot instead of forcing quantum onto ML problems
+- Entirely new ML paradigms where quantum is native, not bolted on
+- **Cross-paradigm strategies** — can we use annealing for discrete optimization sub-problems and gate-based QPUs for continuous/algebraic sub-problems within the same pipeline?
+
+## How to Research
+
+### Be Specific
+- **Name real companies** — not "enterprises in regulated industries"
+- **Cite real numbers** — revenue, funding, deal sizes, headcount, growth rates
+- **Identify real people** — decision makers, technical leads, budget holders
+- **Find real problems** — not theoretical pain points, but problems people are paying to solve RIGHT NOW
+
+### Be Technical
+- Read actual papers (arxiv, NeurIPS, ICML, QIP). Not just abstracts — methodology sections.
+- Read D-Wave documentation (Ocean SDK), IBM Qiskit, Cirq, PennyLane, Amazon Braket docs. What CAN the hardware do today across both paradigms?
+- Read GitHub repos. What are people actually implementing? Check PennyLane demos, Qiskit machine learning tutorials, TensorFlow Quantum examples.
+- Look at benchmark results. What are the actual numbers? Compare across annealing and gate-based approaches.
+
+### Be Deep
+- **Engineering blueprints** — how would this actually work? What's the technical architecture?
+- **Feasibility analysis** — what's proven, what's speculative, what's impossible?
+- **Customer discovery** — who has this problem, how big is it, how urgent, what do they currently pay?
+- **Domain specifics** — what data, what workflows, what constraints, what regulations?
+
+### Be Honest
+- If an opportunity is weak, say so
+- If quantum doesn't actually help, say so
+- If a competitor already solved this, say so
+- Distinguish between "validated" and "we think this might work"
+
+### Be Creative
+- Don't just survey what exists. Propose NEW formulations.
+- Ask "what if we changed the ML problem to fit quantum?" not just "how do we fit quantum to ML?"
+- Look at adjacent fields (quantum chemistry, materials science, logistics) for techniques that could transfer to ML
+- Consider: what ML problems are secretly combinatorial but nobody frames them that way?
+
+### Think Beyond Today's Hardware
+- **Don't anchor on current quantum limitations.** Today's machines are early. Research as if quantum hardware will be 10x more powerful in 5 years — what opportunities open up then?
+- **Hybrid is the short-term play, pure quantum is the long-term hidden card.** We can use classical compute to narrow a large search space and hand the hard core to the quantum processor — whether that's an annealer for combinatorial optimization or a gate-based QPU for variational/algorithmic tasks. Evaluate opportunities through both lenses: what's viable as a hybrid system *now*, and what becomes transformative when quantum scales.
+- **Consider both paradigms.** Quantum annealing excels at combinatorial optimization (binary decisions, constraints, scheduling). Gate-based quantum excels at variational algorithms (VQE, QAOA), quantum kernels, amplitude estimation, and problems with algebraic structure. Some problems may benefit from one paradigm; some from both. Don't prematurely narrow.
+
+### Think in Timelines
+- **Now (2026):** What works with D-Wave Advantage2 + hybrid solvers? What works with IBM 100-1000+ qubit processors, Quantinuum H-series, IonQ Forte? PennyLane/Qiskit hybrid workflows?
+- **Near-term (2027-2028):** D-Wave ~20K qubits. IBM/Google 1000-10K logical qubits with error correction improving. What crosses the threshold?
+- **Medium-term (2029-2030):** Early fault-tolerant quantum computing. Thousands of logical qubits. Algorithms like quantum PCA, quantum SVM, quantum Boltzmann training become practical?
+- Be explicit about which timeline AND which paradigm (annealing vs gate-based) each idea targets
+
+## What Success Looks Like
+
+A concrete, implementable technical approach where:
+1. Quantum provides a **measurable advantage** (>10% on a meaningful metric) over the best classical baseline
+2. The advantage holds at **practical scale** (not just toy problems)
+3. The approach is **implementable** with hardware available in 0-24 months
+4. There is a **real ML use case** where this matters (not a contrived benchmark)
+
+Even a single such approach is enough. We only need one.
+
+## Connect It Back
+Every finding should answer: **"So what? What should Superpose do with this information?"**
+
+## What We Don't Know Yet
+- Which AI workloads benefit most from quantum computing (annealing, gate-based, or both)
+- Which quantum paradigm fits which problem class
+- Which industries have problems where this matters
+- What the right go-to-market motion is
+- How to price this
+- Who the first 10 customers are
+
+Help us figure it out.
+
+"""
+
+search_instructions = ".winterfox/search_instructions.md"
+context_files = [".winterfox/context/ENGINEERING-RESEARCH.md", ".winterfox/context/GTM-STRATEGY-RESEARCH.md"]
+[[agents]]
+provider = "moonshot"
+model = "kimi-k2.5"
+api_key_env = "MOONSHOT_API_KEY"
+supports_native_search = false
+role = "primary"  # Synthesizes results from all agents
+
+[[agents]]
+provider = "openrouter"
+model = "google/gemini-3-flash-preview"
+api_key_env = "OPENROUTER_API_KEY"
+supports_native_search = true
+role = "secondary"  # Provides independent research
+
+[search]
+use_llm_native_search = true  # Use LLM's native search when available
+fallback_enabled = true  # Automatic fallback to next provider on failure
+
+[[search.providers]]
+name = "brave"
+api_key_env = "BRAVE_API_KEY"
+priority = 1
+max_results = 10
+enabled = true
+
+[orchestrator]
+max_searches_per_agent = 25
+agent_timeout_seconds = 300
+confidence_discount = 0.7  # Initial skepticism (lower = more skeptical)
+consensus_boost = 0.15  # Confidence boost for multi-agent agreement
+similarity_threshold = 0.75  # Threshold for claim deduplication
+
+[storage]
+db_path = ".winterfox/graph.db"
+raw_output_dir = ".winterfox/raw"
+git_auto_commit = true
+git_auto_push = false
+
+[multi_tenancy]
+enabled = false  # Single workspace mode (CLI)
+workspace_id = "default"

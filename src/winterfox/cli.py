@@ -93,21 +93,33 @@ def init(
 
         # Interactive setup
         if interactive:
-            agents_config = _prompt_agent_setup()
+            lead_agent_config, research_agents_config = _prompt_agent_setup()
             search_config = _prompt_search_setup()
         else:
-            # Default: single Claude agent with Tavily search
-            agents_config = [
+            # Default: single Claude agent for both Lead and Research
+            lead_agent_config = {
+                "provider": "anthropic",
+                "model": "claude-opus-4-20251120",
+                "supports_native_search": True,
+            }
+            research_agents_config = [
                 {
                     "provider": "anthropic",
                     "model": "claude-opus-4-20251120",
-                    "role": "primary",
+                    "supports_native_search": True,
                 }
             ]
             search_config = [{"name": "tavily", "priority": 1}]
 
         # Create config with selected options
-        create_default_config(config_path, project_name, north_star, agents_config, search_config)
+        create_default_config(
+            config_path,
+            project_name,
+            north_star,
+            lead_agent_config,
+            research_agents_config,
+            search_config
+        )
 
         # Create .winterfox/ directory structure
         (path / ".winterfox" / "raw").mkdir(parents=True, exist_ok=True)
@@ -199,7 +211,23 @@ def init(
 
         # Success message with API key reminders
         api_keys_needed = set()
-        for agent in agents_config:
+
+        # Add Lead agent API key
+        if lead_agent_config["provider"] == "anthropic":
+            api_keys_needed.add("ANTHROPIC_API_KEY")
+        elif lead_agent_config["provider"] == "moonshot":
+            api_keys_needed.add("MOONSHOT_API_KEY")
+        elif lead_agent_config["provider"] == "openai":
+            api_keys_needed.add("OPENAI_API_KEY")
+        elif lead_agent_config["provider"] == "google":
+            api_keys_needed.add("GOOGLE_API_KEY")
+        elif lead_agent_config["provider"] == "xai":
+            api_keys_needed.add("XAI_API_KEY")
+        elif lead_agent_config["provider"] == "openrouter":
+            api_keys_needed.add("OPENROUTER_API_KEY")
+
+        # Add Research agent API keys
+        for agent in research_agents_config:
             if agent["provider"] == "anthropic":
                 api_keys_needed.add("ANTHROPIC_API_KEY")
             elif agent["provider"] == "moonshot":
@@ -293,10 +321,13 @@ def _update_config_with_context(
         config_path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def _prompt_agent_setup() -> list[dict]:
-    """Interactive prompt for agent selection."""
-    console.print("\n[bold cyan]═══ LLM Configuration ═══[/bold cyan]\n")
+def _prompt_agent_setup() -> tuple[dict, list[dict]]:
+    """
+    Interactive prompt for agent selection.
 
+    Returns:
+        (lead_agent_config, research_agents_config)
+    """
     # Available LLMs with costs
     llm_options = {
         "1": {
@@ -343,168 +374,204 @@ def _prompt_agent_setup() -> list[dict]:
         },
     }
 
-    # Display options
-    table = Table(title="Available LLMs", show_header=True, header_style="bold magenta")
-    table.add_column("ID", style="cyan", width=4)
-    table.add_column("LLM", style="white", width=35)
-    table.add_column("Cost", style="yellow", width=40)
+    # Display options table (shared for both Lead and Research)
+    def show_llm_table():
+        table = Table(title="Available LLMs", show_header=True, header_style="bold magenta")
+        table.add_column("ID", style="cyan", width=4)
+        table.add_column("LLM", style="white", width=35)
+        table.add_column("Cost", style="yellow", width=40)
 
-    for id, llm in llm_options.items():
-        table.add_row(id, llm["name"], llm["cost"])
+        for id, llm in llm_options.items():
+            table.add_row(id, llm["name"], llm["cost"])
 
-    console.print(table)
+        console.print(table)
 
-    # Select LLMs for parallel research
-    console.print("\n[bold]Select LLMs for parallel research[/bold]")
-    console.print("Enter numbers separated by commas (e.g., '1,2' for Claude + Kimi)")
-    console.print("Or press Enter for default: Claude Opus 4.6 only\n")
+    # ═══ SECTION 1: Lead LLM Selection ═══
+    console.print("\n[bold cyan]═══ Lead LLM Configuration ═══[/bold cyan]\n")
+    console.print("The Lead LLM orchestrates the entire research cycle:")
+    console.print("  • Selects which direction to pursue next")
+    console.print("  • Dispatches research agents for parallel investigation")
+    console.print("  • Synthesizes raw outputs into strategic directions")
+    console.print("  • Recommended: Claude Opus (best strategic reasoning)\n")
 
-    selection = typer.prompt("Your selection", default="1", show_default=True)
+    show_llm_table()
 
-    # Parse selection
-    selected_ids = [s.strip() for s in selection.split(",")]
-    selected_llms = []
+    console.print("\n[bold]Select Lead LLM (single selection)[/bold]")
+    console.print("The Lead LLM should have strong reasoning capabilities.\n")
 
-    for id in selected_ids:
+    lead_selection = typer.prompt("Lead LLM ID", default="1", show_default=True)
+
+    # Validate and process Lead LLM selection
+    if lead_selection not in llm_options:
+        console.print("[yellow]Invalid selection, using default: Claude Opus 4.6[/yellow]")
+        lead_selection = "1"
+
+    lead_llm = llm_options[lead_selection].copy()
+
+    # Handle OpenRouter for Lead LLM if selected
+    if lead_llm["provider"] == "openrouter":
+        lead_llm = _handle_openrouter_selection(lead_llm, console, "Lead LLM")
+        if lead_llm is None:
+            console.print("[yellow]Falling back to Claude Opus 4.6 for Lead LLM[/yellow]")
+            lead_llm = llm_options["1"].copy()
+
+    # Build Lead agent config (no role field)
+    lead_agent_config = {
+        "provider": lead_llm["provider"],
+        "model": lead_llm["model"],
+        "supports_native_search": lead_llm["supports_native_search"],
+    }
+
+    console.print(f"\n[green]✓[/green] Lead LLM configured: {lead_llm['name']}\n")
+
+    # ═══ SECTION 2: Research Agent Selection ═══
+    console.print("\n[bold cyan]═══ Research Agent Configuration ═══[/bold cyan]\n")
+    console.print("Research agents perform parallel investigation:")
+    console.print("  • Multiple agents = diverse perspectives + consensus")
+    console.print("  • Single agent = faster and cheaper")
+    console.print("  • Can use same LLM as Lead (overlap allowed)\n")
+
+    show_llm_table()
+
+    console.print("\n[bold]Select Research LLMs (comma-separated)[/bold]")
+    console.print("Examples: '1' for Claude only, '1,2' for Claude + Kimi")
+    console.print("You can include the same LLM as your Lead agent.\n")
+
+    research_selection = typer.prompt("Research LLM IDs", default="1,2", show_default=True)
+
+    # Parse research agent selections
+    research_ids = [s.strip() for s in research_selection.split(",")]
+    research_llms = []
+
+    for id in research_ids:
         if id in llm_options:
             llm = llm_options[id].copy()
 
-            # Handle OpenRouter - fetch models from API
+            # Handle OpenRouter if selected
             if llm["provider"] == "openrouter":
-                console.print("\n[bold cyan]OpenRouter selected![/bold cyan]")
-                console.print("OpenRouter provides access to many models through one API.")
-                console.print("Fetching available models (no API key needed for browsing)...\n")
-
-                try:
-                    import asyncio
-                    from .agents.adapters.openrouter import fetch_openrouter_models
-
-                    with console.status("[bold green]Fetching models from OpenRouter..."):
-                        models = asyncio.run(fetch_openrouter_models())  # No API key needed
-
-                    if not models:
-                        console.print("[red]No models available from OpenRouter[/red]")
-                        continue
-
-                    # Display models
-                    console.print(f"\n[green]✓[/green] Found {len(models)} models\n")
-
-                    # Filter to popular/recommended models for better UX
-                    popular_models = [
-                        m for m in models
-                        if any(keyword in m["id"].lower() for keyword in [
-                            "claude", "gpt-4", "gpt-3.5", "gemini", "llama-3",
-                            "mixtral", "qwen", "deepseek"
-                        ])
-                    ]
-
-                    if not popular_models:
-                        popular_models = models[:20]  # Fallback to first 20
-
-                    # Create model selection table
-                    model_table = Table(title="OpenRouter Models", show_header=True)
-                    model_table.add_column("ID", style="cyan", width=4)
-                    model_table.add_column("Model", style="white", width=40)
-                    model_table.add_column("Context", style="yellow", width=12)
-                    model_table.add_column("Cost (1M tokens)", style="green", width=25)
-
-                    model_map = {}
-                    for i, model in enumerate(popular_models[:30], 1):  # Show max 30
-                        model_id = model["id"]
-                        model_name = model.get("name", model_id)
-                        context_length = model.get("context_length", "N/A")
-
-                        # Format pricing
-                        pricing = model.get("pricing", {})
-                        prompt_price = float(pricing.get("prompt", 0)) * 1_000_000
-                        completion_price = float(pricing.get("completion", 0)) * 1_000_000
-                        price_str = f"${prompt_price:.2f}in/${completion_price:.2f}out"
-
-                        model_table.add_row(
-                            str(i),
-                            model_name[:38],
-                            str(context_length),
-                            price_str
-                        )
-                        model_map[str(i)] = model
-
-                    console.print(model_table)
-
-                    # Let user select model
-                    console.print("\n[bold]Select a model[/bold]")
-                    console.print("[dim]You'll need to set OPENROUTER_API_KEY env var before running[/dim]\n")
-                    model_selection = typer.prompt("Model ID", default="1")
-
-                    if model_selection not in model_map:
-                        console.print(f"[yellow]Invalid selection, skipping OpenRouter[/yellow]")
-                        continue
-
-                    selected_model = model_map[model_selection]
-
-                    # Update llm config with selected model
-                    llm["model"] = selected_model["id"]
-                    llm["name"] = f"OpenRouter: {selected_model.get('name', selected_model['id'])}"
-                    llm["cost"] = f"${float(selected_model.get('pricing', {}).get('prompt', 0)) * 1_000_000:.2f} input / ${float(selected_model.get('pricing', {}).get('completion', 0)) * 1_000_000:.2f} output per 1M tokens"
-
-                    # Check if model supports native search (Claude, Gemini)
-                    model_id_lower = selected_model["id"].lower()
-                    llm["supports_native_search"] = any(
-                        keyword in model_id_lower for keyword in ["claude", "gemini"]
-                    )
-
-                except Exception as e:
-                    console.print(f"[red]Failed to fetch OpenRouter models: {e}[/red]")
-                    console.print("[yellow]Skipping OpenRouter[/yellow]")
+                llm = _handle_openrouter_selection(llm, console, f"Research Agent {len(research_llms) + 1}")
+                if llm is None:
+                    console.print(f"[yellow]Skipping OpenRouter agent[/yellow]")
                     continue
 
-            selected_llms.append(llm)
+            research_llms.append(llm)
         else:
             console.print(f"[yellow]Warning: Invalid option '{id}', skipping[/yellow]")
 
-    if not selected_llms:
-        console.print("[yellow]No valid LLMs selected, using default: Claude Opus 4.6[/yellow]")
-        selected_llms = [llm_options["1"]]
+    if not research_llms:
+        console.print("[yellow]No valid Research LLMs selected, using default: Claude Opus 4.6[/yellow]")
+        research_llms = [llm_options["1"].copy()]
 
-    # Select primary LLM (if multiple selected)
-    primary_idx = 0
-    if len(selected_llms) > 1:
-        console.print(f"\n[bold]Select primary LLM for synthesis[/bold]")
-        console.print("The primary LLM will review and synthesize findings from all LLMs.\n")
-
-        for i, llm in enumerate(selected_llms, 1):
-            console.print(f"{i}. {llm['name']}")
-
-        primary_selection = typer.prompt(
-            "\nPrimary LLM",
-            default="1",
-            show_default=True,
-            type=int,
-        )
-
-        if 1 <= primary_selection <= len(selected_llms):
-            primary_idx = primary_selection - 1
-        else:
-            console.print(f"[yellow]Invalid selection, using first LLM as primary[/yellow]")
-            primary_idx = 0
-
-    # Build agent configs
-    agents_config = []
-    for i, llm in enumerate(selected_llms):
-        role = "primary" if i == primary_idx else "secondary"
-        agents_config.append({
+    # Build research agent configs (no role field)
+    research_agents_config = []
+    for llm in research_llms:
+        research_agents_config.append({
             "provider": llm["provider"],
             "model": llm["model"],
-            "role": role,
             "supports_native_search": llm["supports_native_search"],
         })
 
     # Summary
-    console.print(f"\n[green]✓[/green] Configured {len(agents_config)} LLM(s):")
-    for agent in agents_config:
-        role_badge = "[cyan](primary)[/cyan]" if agent["role"] == "primary" else "[dim](secondary)[/dim]"
-        console.print(f"  • {agent['model']} {role_badge}")
+    console.print(f"\n[green]✓[/green] Configured {len(research_agents_config)} Research agent(s):")
+    for agent in research_agents_config:
+        console.print(f"  • {agent['model']}")
 
-    return agents_config
+    return lead_agent_config, research_agents_config
+
+
+def _handle_openrouter_selection(llm: dict, console: Console, label: str) -> dict | None:
+    """
+    Handle OpenRouter model selection with API fetching.
+
+    Returns:
+        Updated llm config dict, or None if selection failed
+    """
+    console.print(f"\n[bold cyan]OpenRouter selected for {label}![/bold cyan]")
+    console.print("OpenRouter provides access to many models through one API.")
+    console.print("Fetching available models (no API key needed for browsing)...\n")
+
+    try:
+        import asyncio
+        from .agents.adapters.openrouter import fetch_openrouter_models
+
+        with console.status("[bold green]Fetching models from OpenRouter..."):
+            models = asyncio.run(fetch_openrouter_models())  # No API key needed
+
+        if not models:
+            console.print("[red]No models available from OpenRouter[/red]")
+            return None
+
+        # Display models
+        console.print(f"\n[green]✓[/green] Found {len(models)} models\n")
+
+        # Filter to popular/recommended models for better UX
+        popular_models = [
+            m for m in models
+            if any(keyword in m["id"].lower() for keyword in [
+                "claude", "gpt-4", "gpt-3.5", "gemini", "llama-3",
+                "mixtral", "qwen", "deepseek"
+            ])
+        ]
+
+        if not popular_models:
+            popular_models = models[:20]  # Fallback to first 20
+
+        # Create model selection table
+        model_table = Table(title="OpenRouter Models", show_header=True)
+        model_table.add_column("ID", style="cyan", width=4)
+        model_table.add_column("Model", style="white", width=40)
+        model_table.add_column("Context", style="yellow", width=12)
+        model_table.add_column("Cost (1M tokens)", style="green", width=25)
+
+        model_map = {}
+        for i, model in enumerate(popular_models[:30], 1):  # Show max 30
+            model_id = model["id"]
+            model_name = model.get("name", model_id)
+            context_length = model.get("context_length", "N/A")
+
+            # Format pricing
+            pricing = model.get("pricing", {})
+            prompt_price = float(pricing.get("prompt", 0)) * 1_000_000
+            completion_price = float(pricing.get("completion", 0)) * 1_000_000
+            price_str = f"${prompt_price:.2f}in/${completion_price:.2f}out"
+
+            model_table.add_row(
+                str(i),
+                model_name[:38],
+                str(context_length),
+                price_str
+            )
+            model_map[str(i)] = model
+
+        console.print(model_table)
+
+        # Let user select model
+        console.print(f"\n[bold]Select a model for {label}[/bold]")
+        console.print("[dim]You'll need to set OPENROUTER_API_KEY env var before running[/dim]\n")
+        model_selection = typer.prompt("Model ID", default="1")
+
+        if model_selection not in model_map:
+            console.print(f"[yellow]Invalid selection[/yellow]")
+            return None
+
+        selected_model = model_map[model_selection]
+
+        # Update llm config with selected model
+        llm["model"] = selected_model["id"]
+        llm["name"] = f"OpenRouter: {selected_model.get('name', selected_model['id'])}"
+        llm["cost"] = f"${float(selected_model.get('pricing', {}).get('prompt', 0)) * 1_000_000:.2f} input / ${float(selected_model.get('pricing', {}).get('completion', 0)) * 1_000_000:.2f} output per 1M tokens"
+
+        # Check if model supports native search (Claude, Gemini)
+        model_id_lower = selected_model["id"].lower()
+        llm["supports_native_search"] = any(
+            keyword in model_id_lower for keyword in ["claude", "gemini"]
+        )
+
+        return llm
+
+    except Exception as e:
+        console.print(f"[red]Failed to fetch OpenRouter models: {e}[/red]")
+        return None
 
 
 def _prompt_search_setup() -> list[dict]:
@@ -614,19 +681,24 @@ async def _init_database(db_path: Path) -> None:
 def run(
     n: int = typer.Option(1, "--count", "-n", help="Number of cycles to run"),
     focus: Optional[str] = typer.Option(None, "--focus", "-f", help="Specific node ID to research"),
+    no_consensus: bool = typer.Option(
+        False,
+        "--no-consensus",
+        help="Deprecated. Consensus mode is always enabled in Lead LLM flow.",
+    ),
     config: Path = typer.Option(Path("winterfox.toml"), "--config", "-c", help="Config file path"),
     log_level: str = typer.Option("INFO", "--log-level", "-l", help="Log level"),
-    no_consensus: bool = typer.Option(False, "--no-consensus", help="Disable multi-agent consensus"),
     report: bool = typer.Option(False, "--report", help="Generate a report after cycles complete"),
 ) -> None:
     """
+    Run N research cycles with Lead LLM architecture.
     Run research cycles.
 
     A cycle:
     1. Selects a target node (or uses --focus)
     2. Generates research prompts
     3. Dispatches agents to research
-    4. Merges findings into knowledge graph
+    4. Synthesizes and merges new directions into knowledge graph
     5. Propagates confidence changes
 
     Example:
@@ -655,6 +727,11 @@ async def _run_cycles(
     generate_report: bool = False,
 ) -> None:
     """Run research cycles."""
+    if not use_consensus:
+        console.print(
+            "[yellow]Warning:[/yellow] --no-consensus is deprecated and ignored."
+        )
+
     # Load configuration
     config = load_config(config_path)
 
@@ -678,7 +755,7 @@ async def _run_cycles(
             importance=1.0,
             depth=0,
             created_by_cycle=0,
-            node_type="question",
+            node_type="direction",
         )
 
     # Initialize agents
@@ -686,46 +763,58 @@ async def _run_cycles(
     from .agents.adapters.base import AgentAuthenticationError
     from .agents.adapters.kimi import KimiAdapter
     from .agents.adapters.openrouter import OpenRouterAdapter
-    from .agents.pool import AgentPool
 
     api_keys = config.get_agent_api_keys()
 
-    adapters = []
-    primary_provider = None
-    for agent_config in config.agents:
+    def create_adapter(agent_config, api_keys_dict):
+        """Helper function to create an adapter from agent config."""
         key = f"{agent_config.provider}:{agent_config.model}"
-        api_key = api_keys.get(key, "")
+        api_key = api_keys_dict.get(key, "")
 
         if agent_config.provider == "anthropic":
-            adapter = AnthropicAdapter(
+            return AnthropicAdapter(
                 model=agent_config.model,
                 api_key=api_key if not agent_config.use_subscription else None,
                 use_subscription=agent_config.use_subscription,
                 timeout=agent_config.timeout_seconds,
             )
         elif agent_config.provider == "moonshot":
-            adapter = KimiAdapter(
+            return KimiAdapter(
                 model=agent_config.model,
                 api_key=api_key,
                 timeout=agent_config.timeout_seconds,
             )
         elif agent_config.provider == "openrouter":
-            adapter = OpenRouterAdapter(
+            return OpenRouterAdapter(
                 model=agent_config.model,
                 api_key=api_key,
                 timeout=agent_config.timeout_seconds,
                 supports_native_search=agent_config.supports_native_search,
             )
         else:
-            console.print(f"[yellow]Warning: Unsupported provider {agent_config.provider}, skipping[/yellow]")
+            raise ValueError(f"Unsupported provider: {agent_config.provider}")
+
+    # Create Lead agent adapter
+    try:
+        lead_adapter = create_adapter(config.lead_agent, api_keys)
+    except ValueError as e:
+        console.print(f"[red]Error creating Lead agent: {e}[/red]")
+        await graph.close()
+        raise typer.Exit(1)
+
+    # Create Research agent adapters
+    research_adapters = []
+    for agent_config in config.agents:
+        try:
+            adapter = create_adapter(agent_config, api_keys)
+            research_adapters.append(adapter)
+        except ValueError as e:
+            console.print(f"[yellow]Warning: {e}, skipping research agent[/yellow]")
             continue
 
-        if agent_config.role == "primary":
-            primary_provider = agent_config.provider
-        adapters.append(adapter)
-
     # Pre-flight: verify all agent API keys before starting research
-    for adapter in adapters:
+    all_adapters = [lead_adapter] + research_adapters
+    for adapter in all_adapters:
         try:
             await adapter.verify()
             console.print(f"[green]✓[/green] {adapter.name}: API key verified")
@@ -738,17 +827,15 @@ async def _run_cycles(
             await graph.close()
             raise typer.Exit(1)
 
-    verified_adapters = adapters
+    # Create LeadLLM instance
+    from .orchestrator.lead import LeadLLM
 
-    # Determine primary agent index among verified adapters
-    primary_agent_index = 0
-    if primary_provider:
-        for i, adapter in enumerate(verified_adapters):
-            if primary_provider in adapter.name.lower():
-                primary_agent_index = i
-                break
-
-    agent_pool = AgentPool(verified_adapters, primary_agent_index=primary_agent_index)
+    lead_llm = LeadLLM(
+        adapter=lead_adapter,
+        graph=graph,
+        north_star=config.get_north_star(config_path.parent),
+        report_content=None,  # Will be generated on first report interval
+    )
 
     # Initialize search providers
     from .agents.tools.search import configure_search
@@ -804,12 +891,12 @@ async def _run_cycles(
 
     orchestrator = Orchestrator(
         graph=graph,
-        agent_pool=agent_pool,
+        lead_llm=lead_llm,
+        research_agents=research_adapters,
         north_star=north_star,
         tools=tools,
         max_searches_per_cycle=config.orchestrator.max_searches_per_agent,
-        confidence_discount=config.orchestrator.confidence_discount,
-        consensus_boost=config.orchestrator.consensus_boost,
+        report_interval=config.orchestrator.report_interval,
         search_instructions=search_instructions,
         context_files=context_files,
         raw_output_dir=raw_output_dir,
@@ -828,26 +915,23 @@ async def _run_cycles(
 
             result = await orchestrator.run_cycle(
                 target_node_id=focus_node_id,
-                use_consensus=use_consensus,
             )
 
             # Show cycle result
             if result.success:
                 console.print(
                     f"\n[green]✓[/green] Cycle {result.cycle_id}: "
-                    f"{result.findings_created} created, {result.findings_updated} updated | "
+                    f"{result.directions_created} created, {result.directions_updated} updated | "
                     f"${result.total_cost_usd:.4f} | {result.duration_seconds:.1f}s"
                 )
 
-                # Show findings from each agent
+                # Show concise per-agent stats (raw-output architecture)
                 for output in result.agent_outputs:
-                    if output.findings:
-                        console.print(f"\n  [bold cyan]{output.agent_name}[/bold cyan] ({len(output.findings)} findings):")
-                        for finding in output.findings:
-                            conf_color = "green" if finding.confidence >= 0.7 else "yellow" if finding.confidence >= 0.4 else "red"
-                            console.print(f"    [{conf_color}]{finding.confidence:.0%}[/] {finding.claim}")
-                            for ev in finding.evidence[:2]:
-                                console.print(f"        [dim]- {ev.source}[/dim]")
+                    console.print(
+                        f"  [bold cyan]{output.agent_name}[/bold cyan]: "
+                        f"{len(output.searches_performed)} searches | "
+                        f"${output.cost_usd:.4f} | {output.duration_seconds:.1f}s"
+                    )
             else:
                 console.print(
                     f"\n[red]✗[/red] Cycle {result.cycle_id} failed: {result.error_message}"
@@ -867,8 +951,12 @@ async def _run_cycles(
     # Generate report if requested
     if generate_report:
         north_star = config.get_north_star(config_path.parent)
-        primary_adapter = verified_adapters[primary_agent_index]
-        await _generate_and_save_report(graph, primary_adapter, north_star, config_path)
+        await _generate_and_save_report(
+            graph,
+            lead_adapter,
+            north_star,
+            config_path,
+        )
 
     await graph.close()
 

@@ -27,7 +27,12 @@ class Evidence(BaseModel):
 
 
 class KnowledgeNode(BaseModel):
-    """A node in the knowledge graph representing a claim or finding."""
+    """
+    A node in the knowledge graph representing a research direction.
+
+    All nodes are directions to pursue - no semantic types (question, hypothesis, etc.).
+    The Lead LLM decides what directions matter and how to structure them.
+    """
 
     # Core identification
     id: str = Field(default_factory=lambda: str(uuid4()), description="Unique node ID")
@@ -35,14 +40,14 @@ class KnowledgeNode(BaseModel):
     parent_id: str | None = Field(default=None, description="Parent node ID (None for root)")
 
     # Content
-    claim: str = Field(..., min_length=1, description="The claim text")
+    claim: str = Field(..., min_length=1, description="The direction/claim text")
 
     # Metrics
     confidence: float = Field(
         default=0.0,
         ge=0.0,
         le=1.0,
-        description="How well-supported this claim is"
+        description="How well-supported this direction is"
     )
     importance: float = Field(
         default=0.5,
@@ -52,9 +57,9 @@ class KnowledgeNode(BaseModel):
     )
     depth: int = Field(default=0, ge=0, description="How many cycles have refined this node")
 
-    # Node semantics
-    node_type: Literal["question", "hypothesis", "supporting", "opposing"] | None = Field(
-        default=None, description="Semantic role in hypothesis tree (None for legacy nodes)"
+    # Node semantics - simplified to direction-only
+    node_type: Literal["direction"] = Field(
+        default="direction", description="All nodes are directions (unified model)"
     )
 
     # Status and relationships
@@ -68,7 +73,7 @@ class KnowledgeNode(BaseModel):
 
     # Supporting data
     evidence: list[Evidence] = Field(
-        default_factory=list, description="Evidence supporting this claim"
+        default_factory=list, description="Evidence supporting this direction"
     )
     sources: list[str] = Field(
         default_factory=list, description="Paths to Layer 3 raw output files"
@@ -115,15 +120,16 @@ class KnowledgeNode(BaseModel):
                 "id": "abc123",
                 "workspace_id": "default",
                 "parent_id": "parent123",
-                "claim": "The legal tech TAM is $2.3B in 2024. Market is growing at 15% CAGR.",
+                "claim": "Explore B2B vs B2C market fit for legal tech startups in 2024",
                 "confidence": 0.75,
                 "importance": 0.9,
                 "depth": 3,
+                "node_type": "direction",
                 "status": "active",
                 "children_ids": ["child1", "child2"],
-                "tags": ["market-size", "legal-tech"],
+                "tags": ["market-fit", "legal-tech", "segmentation"],
                 "evidence": [],
-                "sources": [".winterfox/raw/cycle_001.json"],
+                "sources": [".winterfox/raw/2024-01-15/cycle_003.md"],
                 "created_by_cycle": 1,
                 "updated_by_cycle": 3,
             }

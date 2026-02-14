@@ -22,7 +22,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "typer[all]>=0.12.0",         # CLI framework with rich support
+    "typer>=0.12.0",              # CLI framework
     "pydantic>=2.7.0",            # Data validation
     "pydantic-settings>=2.2.0",   # Settings management
     "aiosqlite>=0.20.0",          # Async SQLite

@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 from .search import SearchManager, web_search
 from .web_fetch import web_fetch
-from .graph_tools import read_graph_node, search_graph, note_finding, set_graph_context
+from .graph_tools import read_graph_node, search_graph, set_graph_context
 
 if TYPE_CHECKING:
     from ...graph.store import KnowledgeGraph
@@ -16,7 +16,6 @@ __all__ = [
     "web_fetch",
     "read_graph_node",
     "search_graph",
-    "note_finding",
     "get_research_tools",
 ]
 
@@ -85,38 +84,6 @@ def get_research_tools(graph: "KnowledgeGraph") -> list["ToolDefinition"]:
                 "required": ["query"],
             },
             execute=lambda query, limit=5: search_graph(query, limit),
-        ),
-        ToolDefinition(
-            name="note_finding",
-            description="Record a research finding (queued for orchestrator)",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "claim": {"type": "string", "description": "Factual claim (2-3 sentences)"},
-                    "confidence": {"type": "number", "description": "Confidence 0.0-1.0", "minimum": 0, "maximum": 1},
-                    "evidence": {
-                        "type": "array",
-                        "description": "List of evidence",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "text": {"type": "string"},
-                                "source": {"type": "string"},
-                            },
-                            "required": ["text", "source"],
-                        },
-                    },
-                    "finding_type": {
-                        "type": "string",
-                        "enum": ["hypothesis", "supporting", "opposing"],
-                        "description": "Type of finding: hypothesis (proposed answer), supporting (evidence for), opposing (evidence against)",
-                    },
-                },
-                "required": ["claim", "confidence", "evidence"],
-            },
-            execute=lambda claim, confidence, evidence, finding_type=None: note_finding(
-                claim, confidence, evidence, finding_type=finding_type
-            ),
         ),
     ]
 

@@ -1,9 +1,9 @@
 """
-Main research orchestrator coordinating agent cycles.
+Main research orchestrator coordinating agent cycles with Lead LLM architecture.
 
 The Orchestrator is the high-level coordinator that:
 - Manages the knowledge graph evolution across cycles
-- Coordinates agent pool for multi-agent research
+- Coordinates Lead LLM and research agents
 - Tracks research progress and statistics
 - Provides APIs for running single or multiple cycles
 """
@@ -13,21 +13,21 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..agents.pool import AgentPool
-    from ..agents.protocol import ToolDefinition
+    from ..agents.protocol import AgentAdapter, ToolDefinition
     from ..graph.store import KnowledgeGraph
     from .cycle import CycleResult
+    from .lead import LeadLLM
 
 logger = logging.getLogger(__name__)
 
 
 class Orchestrator:
     """
-    Main research orchestrator that coordinates iterative knowledge building.
+    Main research orchestrator with Lead LLM architecture.
 
     Manages:
     - Knowledge graph evolution across cycles
-    - Agent pool coordination
+    - Lead LLM and research agent coordination
     - Tool availability and context
     - Research cycle execution
     - Progress tracking and statistics
@@ -36,12 +36,12 @@ class Orchestrator:
     def __init__(
         self,
         graph: "KnowledgeGraph",
-        agent_pool: "AgentPool",
+        lead_llm: "LeadLLM",
+        research_agents: list["AgentAdapter"],
         north_star: str,
         tools: list["ToolDefinition"],
         max_searches_per_cycle: int = 25,
-        confidence_discount: float = 0.7,
-        consensus_boost: float = 0.15,
+        report_interval: int = 10,
         search_instructions: str | None = None,
         context_files: list[dict[str, str]] | None = None,
         raw_output_dir: Path | None = None,
@@ -51,23 +51,23 @@ class Orchestrator:
 
         Args:
             graph: Knowledge graph
-            agent_pool: Agent pool for research
+            lead_llm: Lead LLM for orchestration (selection + synthesis)
+            research_agents: Research agents for parallel investigation
             north_star: Project mission/north star statement
             tools: Available tools for agents
             max_searches_per_cycle: Max web searches per agent per cycle
-            confidence_discount: Discount for initial finding confidence (0.7)
-            consensus_boost: Boost when agents agree (0.15)
+            report_interval: Regenerate report every N cycles (default: 10)
             search_instructions: Optional custom search guidance
             context_files: Optional prior research documents
             raw_output_dir: Directory for markdown cycle exports
         """
         self.graph = graph
-        self.agent_pool = agent_pool
+        self.lead_llm = lead_llm
+        self.research_agents = research_agents
         self.north_star = north_star
         self.tools = tools
         self.max_searches_per_cycle = max_searches_per_cycle
-        self.confidence_discount = confidence_discount
-        self.consensus_boost = consensus_boost
+        self.report_interval = report_interval
         self.search_instructions = search_instructions
         self.context_files = context_files or []
         self.raw_output_dir = raw_output_dir
@@ -86,14 +86,12 @@ class Orchestrator:
     async def run_cycle(
         self,
         target_node_id: str | None = None,
-        use_consensus: bool = True,
     ) -> "CycleResult":
         """
-        Run a single research cycle.
+        Run a single research cycle with Lead LLM architecture.
 
         Args:
-            target_node_id: Specific node to research (or None for auto-select)
-            use_consensus: Use multi-agent consensus (if pool has >1 agent)
+            target_node_id: Specific node to research (or None for Lead LLM selection)
 
         Returns:
             CycleResult with stats and outputs
@@ -105,29 +103,24 @@ class Orchestrator:
 
         logger.info(f"=== Starting Cycle {self.cycle_count} ===")
 
-        # Use primary agent for LLM-driven selection
-        selection_adapter = (
-            self.agent_pool.adapters[0] if self.agent_pool.adapters else None
-        )
-
         # Create cycle executor
         cycle = ResearchCycle(
             graph=self.graph,
-            agent_pool=self.agent_pool,
+            lead_llm=self.lead_llm,
+            research_agents=self.research_agents,
             tools=self.tools,
             north_star=self.north_star,
             cycle_id=self.cycle_count,
+            report_interval=self.report_interval,
             search_instructions=self.search_instructions,
             context_files=self.context_files,
             raw_output_dir=self.raw_output_dir,
-            selection_adapter=selection_adapter,
         )
 
         # Execute cycle
         result = await cycle.execute(
             target_node_id=target_node_id,
             max_searches=self.max_searches_per_cycle,
-            use_consensus=use_consensus,
         )
 
         # Update statistics
@@ -145,7 +138,6 @@ class Orchestrator:
     async def run_cycles(
         self,
         n: int,
-        use_consensus: bool = True,
         stop_on_error: bool = False,
     ) -> list["CycleResult"]:
         """
@@ -153,7 +145,6 @@ class Orchestrator:
 
         Args:
             n: Number of cycles to run
-            use_consensus: Use multi-agent consensus
             stop_on_error: Stop if a cycle fails (vs. continue)
 
         Returns:
@@ -164,7 +155,7 @@ class Orchestrator:
         for i in range(n):
             logger.info(f"Running cycle {i + 1}/{n}")
 
-            result = await self.run_cycle(use_consensus=use_consensus)
+            result = await self.run_cycle()
             results.append(result)
 
             if not result.success and stop_on_error:
@@ -177,7 +168,6 @@ class Orchestrator:
         self,
         min_confidence: float = 0.8,
         max_cycles: int = 50,
-        use_consensus: bool = True,
     ) -> list["CycleResult"]:
         """
         Run cycles until graph reaches target confidence.
@@ -185,7 +175,6 @@ class Orchestrator:
         Args:
             min_confidence: Minimum average confidence to reach
             max_cycles: Maximum cycles to run
-            use_consensus: Use multi-agent consensus
 
         Returns:
             List of CycleResults
@@ -209,7 +198,7 @@ class Orchestrator:
                 )
                 break
 
-            result = await self.run_cycle(use_consensus=use_consensus)
+            result = await self.run_cycle()
             results.append(result)
 
             if not result.success:
@@ -250,16 +239,17 @@ class Orchestrator:
         """
         successful_cycles = sum(1 for c in self.cycle_history if c.success)
         failed_cycles = sum(1 for c in self.cycle_history if not c.success)
-        total_findings = sum(
-            c.findings_created + c.findings_updated for c in self.cycle_history
+        total_directions = sum(
+            c.directions_created + c.directions_updated for c in self.cycle_history
         )
 
-        return f"""Research Orchestrator Summary
-================================
+        return f"""Research Orchestrator Summary (Lead LLM Architecture)
+================================================================
 Total Cycles: {self.cycle_count} ({successful_cycles} successful, {failed_cycles} failed)
-Total Findings: {total_findings} (created + updated)
+Total Directions: {total_directions} (created + updated)
 Total Cost: ${self.total_cost_usd:.4f}
-Agents: {len(self.agent_pool.adapters)}
+Lead LLM: {self.lead_llm.adapter.name}
+Research Agents: {len(self.research_agents)}
 North Star: {self.north_star[:100]}...
 """
 

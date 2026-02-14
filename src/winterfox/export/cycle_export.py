@@ -190,9 +190,14 @@ Conflicting findings that need investigation:
 
 """)
             for i, contradiction in enumerate(contradictions, 1):
-                desc = contradiction.get('description', 'N/A')
-                claim_a = contradiction.get('claim_a', 'N/A')
-                claim_b = contradiction.get('claim_b', 'N/A')
+                if isinstance(contradiction, dict):
+                    desc = contradiction.get("description", "N/A")
+                    claim_a = contradiction.get("claim_a", "N/A")
+                    claim_b = contradiction.get("claim_b", "N/A")
+                else:
+                    desc = str(contradiction)
+                    claim_a = "N/A"
+                    claim_b = "N/A"
 
                 sections.append(f"{i}. **{desc}**\n")
                 sections.append(f"   - Agent A: {claim_a}\n")

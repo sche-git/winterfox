@@ -6,20 +6,25 @@ compound knowledge in a graph structure using multi-agent consensus.
 
 Example:
     import asyncio
-    from winterfox import KnowledgeGraph, Orchestrator, AgentPool
+    from winterfox import KnowledgeGraph, Orchestrator
     from winterfox.agents.adapters import AnthropicAdapter
+    from winterfox.orchestrator.lead import LeadLLM
 
     async def main():
         graph = KnowledgeGraph(".winterfox/graph.db")
         await graph.initialize()
 
-        agent_pool = AgentPool([
-            AnthropicAdapter(model="claude-opus-4-20251120", api_key="...")
-        ])
+        lead = LeadLLM(
+            adapter=AnthropicAdapter(model="claude-sonnet-4-20250514"),
+            graph=graph,
+            north_star="Your research mission",
+        )
+        agents = [AnthropicAdapter(model="claude-sonnet-4-20250514")]
 
         orchestrator = Orchestrator(
             graph=graph,
-            agent_pool=agent_pool,
+            lead_llm=lead,
+            research_agents=agents,
             north_star="Your research mission",
             tools=[],
         )
@@ -36,9 +41,7 @@ __version__ = "0.1.0"
 from .graph.store import KnowledgeGraph
 from .graph.models import KnowledgeNode, Evidence
 from .orchestrator import Orchestrator
-from .agents.pool import AgentPool
-from .agents.protocol import AgentAdapter, AgentOutput, Finding
-from .config import ResearchConfig, load_config
+from .agents.protocol import AgentAdapter, AgentOutput
 
 __all__ = [
     "__version__",
@@ -46,10 +49,6 @@ __all__ = [
     "KnowledgeNode",
     "Evidence",
     "Orchestrator",
-    "AgentPool",
     "AgentAdapter",
     "AgentOutput",
-    "Finding",
-    "ResearchConfig",
-    "load_config",
 ]

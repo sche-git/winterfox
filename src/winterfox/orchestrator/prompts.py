@@ -115,25 +115,17 @@ high-quality, verifiable information.
 1. **Evidence-Based**: Every claim needs strong evidence from credible sources
 2. **Specific**: Prefer concrete numbers, quotes, and examples over vague statements
 3. **Skeptical**: Challenge assumptions, look for contradicting views
-4. **Structured**: Use note_finding tool to record each discrete finding
+4. **Structured**: Organize your reasoning clearly in the final response
 5. **Efficient**: You have a budget of {max_searches} web searches - use them wisely
 6. **Build on prior work**: Review the accumulated research context. Do NOT repeat searches already performed. Focus on gaps, contradictions, and new angles
 
-## Finding Format
+## Output Format
 
-When you discover information, use the note_finding tool with:
-- **claim**: 2-3 sentence factual statement
-- **confidence**: 0.0-1.0 based on evidence quality
-  - 0.9-1.0: Multiple authoritative sources, recent data
-  - 0.7-0.8: Single authoritative source or multiple secondary sources
-  - 0.5-0.6: Secondary sources, older data
-  - 0.3-0.4: Weak sources, speculation
-  - 0.0-0.2: Hearsay, unverified claims
-- **evidence**: List of sources with specific quotes/data points
-- **finding_type** (required): Categorize your finding:
-  - `"hypothesis"`: A proposed answer, strategy, or approach
-  - `"supporting"`: Evidence that supports the parent claim/hypothesis
-  - `"opposing"`: Evidence that contradicts or challenges the parent claim
+When you discover important information, include:
+- **Claim**: concise factual statement (2-3 sentences)
+- **Confidence**: 0.0-1.0 with a short rationale
+- **Evidence**: specific sources, quotes, numbers, dates
+- **Implication**: why this matters for next research steps
 
 ## Source Quality Hierarchy
 
@@ -142,7 +134,7 @@ When you discover information, use the note_finding tool with:
 3. **Tier 3** (0.5-0.6): Blog posts, secondary analysis, older sources
 4. **Tier 4** (<0.5): Social media, forums, unverified claims
 
-Your research will be merged with findings from other agents, so focus on verifiable facts."""
+Your raw output will be synthesized with other agents, so focus on verifiable facts."""
 
     # Build context section
     context_section = ""
@@ -184,7 +176,7 @@ Current depth: {target_node.depth} research cycles
 - Challenge assumptions with evidence
 
 Begin your research. Use web_search to find sources, then web_fetch to read full content.
-Record each discrete finding using note_finding as you discover it."""
+Document findings directly in your response with clear evidence."""
 
     logger.debug(
         f"Generated prompts for node {target_node.id[:8]}... "
@@ -238,9 +230,9 @@ You have {max_searches} web searches available. Use them to get a comprehensive 
    - The main claim
    - Supporting evidence
    - Suggested areas for deeper research
-4. Prioritize findings by importance (0.0-1.0)
+4. Prioritize findings by importance (0.0-1.0) in your response
 
-Begin your research using web_search and web_fetch. Record each finding using note_finding."""
+Begin your research using web_search and web_fetch. Provide a structured written analysis."""
 
     return system_prompt, user_prompt
 

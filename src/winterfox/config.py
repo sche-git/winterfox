@@ -19,8 +19,8 @@ from pydantic import BaseModel, Field, field_validator
 logger = logging.getLogger(__name__)
 
 
-class AgentConfig(BaseModel):
-    """Configuration for a single agent."""
+class LeadAgentConfig(BaseModel):
+    """Configuration for the Lead LLM that orchestrates cycles."""
 
     provider: str  # "anthropic", "moonshot", "openai", "xai", "google", "openrouter"
     model: str
@@ -29,9 +29,18 @@ class AgentConfig(BaseModel):
     max_retries: int = 3
     supports_native_search: bool = False
     use_subscription: bool = False  # For Claude: use subscription auth
-    role: Literal["primary", "secondary"] = (
-        "secondary"  # Primary agent synthesizes multi-agent results
-    )
+
+
+class AgentConfig(BaseModel):
+    """Configuration for a research agent (not Lead)."""
+
+    provider: str  # "anthropic", "moonshot", "openai", "xai", "google", "openrouter"
+    model: str
+    api_key_env: str
+    timeout_seconds: int = 300
+    max_retries: int = 3
+    supports_native_search: bool = False
+    use_subscription: bool = False  # For Claude: use subscription auth
 
 
 class SearchProviderConfig(BaseModel):
@@ -69,6 +78,7 @@ class OrchestratorConfig(BaseModel):
 
     max_searches_per_agent: int = 25
     agent_timeout_seconds: int = 300
+    report_interval: int = 10  # Regenerate report every N cycles
     confidence_discount: float = Field(default=0.7, ge=0.0, le=1.0)
     consensus_boost: float = Field(default=0.15, ge=0.0, le=0.5)
     similarity_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
@@ -104,45 +114,28 @@ class ResearchConfig(BaseModel):
     """Complete research project configuration."""
 
     project: ProjectConfig
-    agents: list[AgentConfig]
+    lead_agent: LeadAgentConfig  # NEW: Required Lead LLM
+    agents: list[AgentConfig]  # Research agents only
     search: SearchConfig = Field(default_factory=SearchConfig)
     orchestrator: OrchestratorConfig = Field(default_factory=OrchestratorConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     multi_tenancy: MultiTenancyConfig = Field(default_factory=MultiTenancyConfig)
 
+    @field_validator("lead_agent")
+    @classmethod
+    def validate_lead_agent(cls, v: LeadAgentConfig) -> LeadAgentConfig:
+        """Ensure lead agent is configured."""
+        if not v:
+            raise ValueError("Lead agent must be configured")
+        return v
+
     @field_validator("agents")
     @classmethod
     def validate_at_least_one_agent(cls, v: list[AgentConfig]) -> list[AgentConfig]:
-        """Ensure at least one agent is configured and primary agent is set properly."""
+        """Ensure at least one research agent is configured."""
         if len(v) == 0:
-            raise ValueError("At least one agent must be configured")
-
-        # If multiple agents, ensure primary is explicitly set
-        if len(v) > 1:
-            primary_count = sum(1 for agent in v if agent.role == "primary")
-
-            if primary_count == 0:
-                # Auto-promote first agent to primary
-                v[0].role = "primary"
-            elif primary_count > 1:
-                raise ValueError(
-                    "Only one agent can be marked as 'primary' for synthesis. "
-                    f"Found {primary_count} primary agents."
-                )
-
+            raise ValueError("At least one research agent must be configured")
         return v
-
-    def get_primary_agent_index(self) -> int:
-        """
-        Get index of primary agent (for multi-agent synthesis).
-
-        Returns:
-            Index of primary agent (0 if single agent or first primary in list)
-        """
-        for i, agent in enumerate(self.agents):
-            if agent.role == "primary":
-                return i
-        return 0  # Default to first agent if none marked primary
 
     def get_north_star(self, base_path: Path | None = None) -> str:
         """
@@ -241,23 +234,34 @@ class ResearchConfig(BaseModel):
 
     def get_agent_api_keys(self) -> dict[str, str]:
         """
-        Get API keys from environment variables.
+        Get API keys from environment variables (including Lead agent).
 
         Returns:
-            Dict mapping agent provider to API key
+            Dict mapping agent provider:model to API key
 
         Raises:
             ValueError: If required API key is missing
         """
         api_keys = {}
 
+        # Add Lead agent API key
+        if self.lead_agent.use_subscription:
+            api_keys[f"{self.lead_agent.provider}:{self.lead_agent.model}"] = "subscription"
+        else:
+            api_key = os.environ.get(self.lead_agent.api_key_env)
+            if not api_key:
+                raise ValueError(
+                    f"API key not found in environment: {self.lead_agent.api_key_env} "
+                    f"(required for Lead LLM {self.lead_agent.provider}:{self.lead_agent.model})"
+                )
+            api_keys[f"{self.lead_agent.provider}:{self.lead_agent.model}"] = api_key
+
+        # Add research agent API keys
         for agent in self.agents:
             if agent.use_subscription:
-                # Subscription mode doesn't need API key
                 api_keys[f"{agent.provider}:{agent.model}"] = "subscription"
                 continue
 
-            # Get API key from environment
             api_key = os.environ.get(agent.api_key_env)
             if not api_key:
                 raise ValueError(
@@ -328,46 +332,56 @@ def create_default_config(
     output_path: Path,
     project_name: str,
     north_star: str,
-    agents_config: list[dict],
+    lead_agent_config: dict,
+    research_agents_config: list[dict],
     search_config: list[dict],
 ) -> None:
     """
-    Create a winterfox.toml configuration file with user-selected options.
+    Create a winterfox.toml configuration file with Lead LLM architecture.
 
     Args:
         output_path: Where to write winterfox.toml
         project_name: Project name
         north_star: North star mission statement
-        agents_config: List of agent configurations from interactive setup
-        search_config: List of search engine configurations from interactive setup
+        lead_agent_config: Lead LLM configuration (single dict)
+        research_agents_config: List of research agent configurations
+        search_config: List of search engine configurations
     """
-    # Build agents section
+    # Build lead_agent section
+    api_key_map = {
+        "anthropic": "ANTHROPIC_API_KEY",
+        "moonshot": "MOONSHOT_API_KEY",
+        "openai": "OPENAI_API_KEY",
+        "google": "GOOGLE_API_KEY",
+        "xai": "XAI_API_KEY",
+        "openrouter": "OPENROUTER_API_KEY",
+    }
+    lead_api_key_env = api_key_map.get(lead_agent_config["provider"], "API_KEY")
+
+    lead_agent_toml = f"""[lead_agent]  # Lead LLM orchestrates entire cycle
+provider = "{lead_agent_config['provider']}"
+model = "{lead_agent_config['model']}"
+api_key_env = "{lead_api_key_env}"
+supports_native_search = {str(lead_agent_config.get('supports_native_search', False)).lower()}
+"""
+
+    # Build research agents section
     agents_toml = ""
-    for agent in agents_config:
-        role_comment = "  # Synthesizes results from all agents" if agent["role"] == "primary" else "  # Provides independent research"
-        api_key_map = {
-            "anthropic": "ANTHROPIC_API_KEY",
-            "moonshot": "MOONSHOT_API_KEY",
-            "openai": "OPENAI_API_KEY",
-            "google": "GOOGLE_API_KEY",
-            "xai": "XAI_API_KEY",
-            "openrouter": "OPENROUTER_API_KEY",
-        }
+    for agent in research_agents_config:
         api_key_env = api_key_map.get(agent["provider"], "API_KEY")
 
         agents_toml += f"""
-[[agents]]
+[[agents]]  # Research agent
 provider = "{agent['provider']}"
 model = "{agent['model']}"
 api_key_env = "{api_key_env}"
 supports_native_search = {str(agent.get('supports_native_search', False)).lower()}
-role = "{agent['role']}"{role_comment}
 """
 
     # Build search providers section
     search_toml = ""
     for search in search_config:
-        api_key_map = {
+        search_api_key_map = {
             "tavily": "TAVILY_API_KEY",
             "brave": "BRAVE_API_KEY",
             "bravesearch": "BRAVE_API_KEY",
@@ -387,7 +401,7 @@ role = "{agent['role']}"{role_comment}
         elif name_normalized == "bravesearch":
             name_normalized = "brave"
 
-        api_key_env = api_key_map.get(name_normalized)
+        api_key_env = search_api_key_map.get(name_normalized)
 
         search_toml += f"""
 [[search.providers]]
@@ -405,6 +419,8 @@ name = "{project_name}"
 north_star = """
 {north_star}
 """
+
+{lead_agent_toml}
 {agents_toml}
 [search]
 use_llm_native_search = true  # Use LLM's native search when available
@@ -413,8 +429,8 @@ fallback_enabled = true  # Automatic fallback to next provider on failure
 [orchestrator]
 max_searches_per_agent = 25
 agent_timeout_seconds = 300
+report_interval = 10  # Regenerate report every N cycles for Lead LLM context
 confidence_discount = 0.7  # Initial skepticism (lower = more skeptical)
-consensus_boost = 0.15  # Confidence boost for multi-agent agreement
 similarity_threshold = 0.75  # Threshold for claim deduplication
 
 [storage]

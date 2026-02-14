@@ -31,19 +31,6 @@ class Evidence:
 
 
 @dataclass
-class Finding:
-    """A discrete finding discovered during research."""
-
-    claim: str
-    confidence: float
-    evidence: list[Evidence]
-    suggested_parent_id: str | None = None
-    suggested_children: list[str] = field(default_factory=list)
-    tags: list[str] = field(default_factory=list)
-    finding_type: Literal["hypothesis", "supporting", "opposing"] | None = None
-
-
-@dataclass
 class SearchRecord:
     """Record of a search performed by an agent."""
 
@@ -56,11 +43,15 @@ class SearchRecord:
 
 @dataclass
 class AgentOutput:
-    """Structured output from an agent's research cycle."""
+    """
+    Raw output from an agent's research cycle.
 
-    findings: list[Finding]
+    NO structured findings - raw_text is the primary data source.
+    Lead LLM extracts directions during synthesis.
+    """
+
+    raw_text: str  # PRIMARY DATA - full LLM reasoning and discoveries
     self_critique: str
-    raw_text: str
     searches_performed: list[SearchRecord]
     cost_usd: float
     duration_seconds: float

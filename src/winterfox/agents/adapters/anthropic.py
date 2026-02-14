@@ -17,7 +17,7 @@ from typing import Any
 
 import anthropic
 
-from ..protocol import AgentOutput, Evidence, Finding, SearchRecord, ToolDefinition
+from ..protocol import AgentOutput, Evidence, SearchRecord, ToolDefinition
 from .base import AgentAuthenticationError, BaseAdapter, extract_json_from_text
 
 logger = logging.getLogger(__name__)
@@ -267,19 +267,12 @@ tool for simple factual lookups or when you need structured results.
                             final_text += block.text
 
             # Parse findings from final text
-            findings = self._parse_findings(final_text, tool_calls_log)
-
-            # Calculate metrics
-            duration = time.time() - start_time
-            cost = self._calculate_cost(total_input_tokens, total_output_tokens)
-
             # Extract search records
             searches = self._extract_searches(tool_calls_log)
 
             return AgentOutput(
-                findings=findings,
-                self_critique="",  # Could parse from final text if agent provides it
                 raw_text=final_text,
+                self_critique="",  # Could parse from final text if agent provides it
                 searches_performed=searches,
                 cost_usd=cost,
                 duration_seconds=duration,
@@ -301,9 +294,8 @@ tool for simple factual lookups or when you need structured results.
             cost = self._calculate_cost(total_input_tokens, total_output_tokens)
 
             return AgentOutput(
-                findings=[],
-                self_critique=f"Error: {str(e)}",
                 raw_text=f"Agent failed after {iterations} iterations: {str(e)}",
+                self_critique=f"Error: {str(e)}",
                 searches_performed=[],
                 cost_usd=cost,
                 duration_seconds=duration,
@@ -313,68 +305,6 @@ tool for simple factual lookups or when you need structured results.
                 input_tokens=total_input_tokens,
                 output_tokens=total_output_tokens,
             )
-
-    def _parse_findings(
-        self, text: str, tool_calls: list[dict[str, Any]]
-    ) -> list[Finding]:
-        """
-        Parse findings from agent's response.
-
-        Looks for structured findings or attempts to extract from text.
-
-        Args:
-            text: Agent's final response text
-            tool_calls: Log of tool calls made
-
-        Returns:
-            List of Finding objects
-        """
-        findings = []
-
-        # Try to find JSON structured findings
-        json_data = extract_json_from_text(text)
-        if json_data and "findings" in json_data:
-            for f in json_data["findings"]:
-                findings.append(
-                    Finding(
-                        claim=f.get("claim", ""),
-                        confidence=float(f.get("confidence", 0.5)),
-                        evidence=[
-                            Evidence(
-                                text=e.get("text", ""),
-                                source=e.get("source", ""),
-                                date=datetime.fromisoformat(e["date"])
-                                if "date" in e
-                                else datetime.now(),
-                            )
-                            for e in f.get("evidence", [])
-                        ],
-                        suggested_parent_id=f.get("suggested_parent_id"),
-                        suggested_children=f.get("suggested_children", []),
-                        tags=f.get("tags", []),
-                    )
-                )
-
-        # If no structured findings, look for note_finding tool calls
-        for call in tool_calls:
-            if call["name"] == "note_finding":
-                inp = call["input"]
-                findings.append(
-                    Finding(
-                        claim=inp.get("claim", ""),
-                        confidence=float(inp.get("confidence", 0.5)),
-                        evidence=[
-                            Evidence(
-                                text=e.get("text", ""),
-                                source=e.get("source", ""),
-                            )
-                            for e in inp.get("evidence", [])
-                        ],
-                        finding_type=inp.get("finding_type"),
-                    )
-                )
-
-        return findings
 
     def _extract_searches(
         self, tool_calls: list[dict[str, Any]]
