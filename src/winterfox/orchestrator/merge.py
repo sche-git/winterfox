@@ -18,6 +18,21 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Max sentences allowed by KnowledgeNode.validate_claim_length
+_MAX_CLAIM_SENTENCES = 5
+
+
+def _truncate_claim(claim: str) -> str:
+    """Truncate a claim to fit KnowledgeNode's sentence limit."""
+    import re
+
+    sentences = re.split(r'(?<=[.!?])\s+', claim.strip())
+    if len(sentences) <= _MAX_CLAIM_SENTENCES:
+        return claim
+    truncated = " ".join(sentences[:_MAX_CLAIM_SENTENCES])
+    logger.debug(f"Truncated claim from {len(sentences)} to {_MAX_CLAIM_SENTENCES} sentences")
+    return truncated
+
 
 async def merge_findings_into_graph(
     graph: "KnowledgeGraph",
@@ -102,7 +117,7 @@ async def merge_findings_into_graph(
 
             # Use longer claim if finding is more detailed
             if len(finding.claim) > len(existing.claim):
-                existing.claim = finding.claim
+                existing.claim = _truncate_claim(finding.claim)
 
             # Add tags from finding
             for tag in finding.tags:
@@ -142,7 +157,7 @@ async def merge_findings_into_graph(
 
             # Create node
             new_node = await graph.add_node(
-                claim=finding.claim,
+                claim=_truncate_claim(finding.claim),
                 parent_id=parent_id,
                 confidence=initial_confidence,
                 importance=0.5,  # Default importance, can be adjusted
