@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 
 class Evidence(BaseModel):
@@ -35,7 +35,7 @@ class KnowledgeNode(BaseModel):
     parent_id: str | None = Field(default=None, description="Parent node ID (None for root)")
 
     # Content
-    claim: str = Field(..., min_length=1, max_length=1000, description="The claim (2-3 sentences)")
+    claim: str = Field(..., min_length=1, max_length=2000, description="The claim text")
 
     # Metrics
     confidence: float = Field(
@@ -85,19 +85,6 @@ class KnowledgeNode(BaseModel):
         """Hours since last update."""
         delta = datetime.now() - self.updated_at
         return delta.total_seconds() / 3600
-
-    @field_validator("claim")
-    @classmethod
-    def validate_claim_length(cls, v: str) -> str:
-        """Ensure claims are concise (2-3 sentences)."""
-        sentence_count = v.count('.') + v.count('!') + v.count('?')
-        if sentence_count > 5:
-            raise ValueError(
-                f"Claim has {sentence_count} sentences. "
-                "Keep claims concise (2-3 sentences). "
-                "Split complex findings into parent + children."
-            )
-        return v
 
     def add_evidence(self, evidence: Evidence) -> None:
         """Add evidence to this node."""
