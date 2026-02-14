@@ -40,6 +40,7 @@ def init(
     north_star: Optional[str] = typer.Option(
         None, "--north-star", "-n", help="Mission statement (or use interactive prompt)"
     ),
+    interactive: bool = typer.Option(True, "--interactive/--no-interactive", help="Interactive setup"),
 ) -> None:
     """
     Initialize a new research project.
@@ -69,15 +70,30 @@ def init(
 
         # Get north star if not provided
         if not north_star:
-            console.print("\n[bold]Project Mission / North Star[/bold]")
+            console.print("\n[bold cyan]Project Mission / North Star[/bold cyan]")
             console.print(
                 "Describe your research mission in 1-3 sentences. "
                 "This guides the research agents.\n"
             )
             north_star = typer.prompt("Mission statement")
 
-        # Create default config
-        create_default_config(config_path, project_name, north_star)
+        # Interactive setup
+        if interactive:
+            agents_config = _prompt_agent_setup()
+            search_config = _prompt_search_setup()
+        else:
+            # Default: single Claude agent with Tavily search
+            agents_config = [
+                {
+                    "provider": "anthropic",
+                    "model": "claude-opus-4-20251120",
+                    "role": "primary",
+                }
+            ]
+            search_config = [{"name": "tavily", "priority": 1}]
+
+        # Create config with selected options
+        create_default_config(config_path, project_name, north_star, agents_config, search_config)
 
         # Create .winterfox/ directory structure
         (path / ".winterfox" / "raw").mkdir(parents=True, exist_ok=True)
@@ -88,15 +104,39 @@ def init(
         db_path = path / ".winterfox" / "graph.db"
         asyncio.run(_init_database(db_path))
 
-        # Success message
+        # Success message with API key reminders
+        api_keys_needed = set()
+        for agent in agents_config:
+            if agent["provider"] == "anthropic":
+                api_keys_needed.add("ANTHROPIC_API_KEY")
+            elif agent["provider"] == "moonshot":
+                api_keys_needed.add("MOONSHOT_API_KEY")
+            elif agent["provider"] == "openai":
+                api_keys_needed.add("OPENAI_API_KEY")
+            elif agent["provider"] == "google":
+                api_keys_needed.add("GOOGLE_API_KEY")
+            elif agent["provider"] == "xai":
+                api_keys_needed.add("XAI_API_KEY")
+
+        for search in search_config:
+            if search["name"] == "tavily":
+                api_keys_needed.add("TAVILY_API_KEY")
+            elif search["name"] == "brave":
+                api_keys_needed.add("BRAVE_API_KEY")
+            elif search["name"] == "serper":
+                api_keys_needed.add("SERPER_API_KEY")
+            elif search["name"] == "serpapi":
+                api_keys_needed.add("SERPAPI_KEY")
+
+        api_keys_str = "\n".join(f"   - {key}" for key in sorted(api_keys_needed))
+
         console.print(Panel.fit(
             f"[green]✓[/green] Initialized research project: [bold]{project_name}[/bold]\n\n"
             f"Configuration: {config_path}\n"
             f"Database: {db_path}\n\n"
             "[dim]Next steps:[/dim]\n"
-            "1. Set API keys in environment (ANTHROPIC_API_KEY, TAVILY_API_KEY, etc.)\n"
-            "2. Edit winterfox.toml to configure agents and search providers\n"
-            "3. Run your first cycle: winterfox cycle",
+            f"1. Set API keys in environment:\n{api_keys_str}\n\n"
+            "2. Run your first cycle: winterfox cycle",
             title="Project Initialized",
             border_style="green",
         ))
@@ -104,6 +144,208 @@ def init(
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
+
+
+def _prompt_agent_setup() -> list[dict]:
+    """Interactive prompt for agent selection."""
+    console.print("\n[bold cyan]═══ LLM Configuration ═══[/bold cyan]\n")
+
+    # Available LLMs with costs
+    llm_options = {
+        "1": {
+            "name": "Claude Opus 4.6 (Anthropic)",
+            "provider": "anthropic",
+            "model": "claude-opus-4-20251120",
+            "cost": "$15 input / $75 output per 1M tokens",
+            "supports_native_search": True,
+        },
+        "2": {
+            "name": "Kimi 2.5 (Moonshot AI)",
+            "provider": "moonshot",
+            "model": "kimi-2.5",
+            "cost": "$0.20 per 1M tokens (100x cheaper)",
+            "supports_native_search": False,
+        },
+        "3": {
+            "name": "GPT-4o (OpenAI)",
+            "provider": "openai",
+            "model": "gpt-4o",
+            "cost": "$5 input / $15 output per 1M tokens",
+            "supports_native_search": False,
+        },
+        "4": {
+            "name": "Gemini 2.0 (Google)",
+            "provider": "google",
+            "model": "gemini-2.0-flash-exp",
+            "cost": "Free tier available, then paid",
+            "supports_native_search": True,
+        },
+        "5": {
+            "name": "Grok 2 (xAI)",
+            "provider": "xai",
+            "model": "grok-2",
+            "cost": "Beta pricing varies",
+            "supports_native_search": False,
+        },
+    }
+
+    # Display options
+    table = Table(title="Available LLMs", show_header=True, header_style="bold magenta")
+    table.add_column("ID", style="cyan", width=4)
+    table.add_column("LLM", style="white", width=30)
+    table.add_column("Cost", style="yellow", width=40)
+
+    for id, llm in llm_options.items():
+        table.add_row(id, llm["name"], llm["cost"])
+
+    console.print(table)
+
+    # Select LLMs for parallel research
+    console.print("\n[bold]Select LLMs for parallel research[/bold]")
+    console.print("Enter numbers separated by commas (e.g., '1,2' for Claude + Kimi)")
+    console.print("Or press Enter for default: Claude Opus 4.6 only\n")
+
+    selection = typer.prompt("Your selection", default="1", show_default=True)
+
+    # Parse selection
+    selected_ids = [s.strip() for s in selection.split(",")]
+    selected_llms = []
+
+    for id in selected_ids:
+        if id in llm_options:
+            selected_llms.append(llm_options[id])
+        else:
+            console.print(f"[yellow]Warning: Invalid option '{id}', skipping[/yellow]")
+
+    if not selected_llms:
+        console.print("[yellow]No valid LLMs selected, using default: Claude Opus 4.6[/yellow]")
+        selected_llms = [llm_options["1"]]
+
+    # Select primary LLM (if multiple selected)
+    primary_idx = 0
+    if len(selected_llms) > 1:
+        console.print(f"\n[bold]Select primary LLM for synthesis[/bold]")
+        console.print("The primary LLM will review and synthesize findings from all LLMs.\n")
+
+        for i, llm in enumerate(selected_llms, 1):
+            console.print(f"{i}. {llm['name']}")
+
+        primary_selection = typer.prompt(
+            "\nPrimary LLM",
+            default="1",
+            show_default=True,
+            type=int,
+        )
+
+        if 1 <= primary_selection <= len(selected_llms):
+            primary_idx = primary_selection - 1
+        else:
+            console.print(f"[yellow]Invalid selection, using first LLM as primary[/yellow]")
+            primary_idx = 0
+
+    # Build agent configs
+    agents_config = []
+    for i, llm in enumerate(selected_llms):
+        role = "primary" if i == primary_idx else "secondary"
+        agents_config.append({
+            "provider": llm["provider"],
+            "model": llm["model"],
+            "role": role,
+            "supports_native_search": llm["supports_native_search"],
+        })
+
+    # Summary
+    console.print(f"\n[green]✓[/green] Configured {len(agents_config)} LLM(s):")
+    for agent in agents_config:
+        role_badge = "[cyan](primary)[/cyan]" if agent["role"] == "primary" else "[dim](secondary)[/dim]"
+        console.print(f"  • {agent['model']} {role_badge}")
+
+    return agents_config
+
+
+def _prompt_search_setup() -> list[dict]:
+    """Interactive prompt for search engine selection."""
+    console.print("\n[bold cyan]═══ Search Engine Configuration ═══[/bold cyan]\n")
+
+    # Available search engines
+    search_options = {
+        "1": {
+            "name": "Tavily",
+            "cost": "$1 per 1000 searches (best for research)",
+            "api_key_env": "TAVILY_API_KEY",
+        },
+        "2": {
+            "name": "Brave Search",
+            "cost": "Free tier: 2000 queries/month",
+            "api_key_env": "BRAVE_API_KEY",
+        },
+        "3": {
+            "name": "Serper (Google)",
+            "cost": "$5 per 1000 searches",
+            "api_key_env": "SERPER_API_KEY",
+        },
+        "4": {
+            "name": "SerpAPI (Multi-engine)",
+            "cost": "$50/month for 5000 searches",
+            "api_key_env": "SERPAPI_KEY",
+        },
+        "5": {
+            "name": "DuckDuckGo",
+            "cost": "Free (no API key needed)",
+            "api_key_env": None,
+        },
+    }
+
+    # Display options
+    table = Table(title="Available Search Engines", show_header=True, header_style="bold magenta")
+    table.add_column("ID", style="cyan", width=4)
+    table.add_column("Search Engine", style="white", width=25)
+    table.add_column("Cost", style="yellow", width=40)
+
+    for id, engine in search_options.items():
+        table.add_row(id, engine["name"], engine["cost"])
+
+    console.print(table)
+
+    # Select search engines
+    console.print("\n[bold]Select search engines[/bold]")
+    console.print("Enter numbers separated by commas (e.g., '1,2' for Tavily + Brave)")
+    console.print("Multiple engines will be used with automatic fallback.")
+    console.print("Or press Enter for default: Tavily only\n")
+
+    selection = typer.prompt("Your selection", default="1", show_default=True)
+
+    # Parse selection
+    selected_ids = [s.strip() for s in selection.split(",")]
+    selected_engines = []
+
+    for i, id in enumerate(selected_ids, 1):
+        if id in search_options:
+            engine = search_options[id].copy()
+            engine["priority"] = i  # Priority based on selection order
+            selected_engines.append(engine)
+        else:
+            console.print(f"[yellow]Warning: Invalid option '{id}', skipping[/yellow]")
+
+    if not selected_engines:
+        console.print("[yellow]No valid engines selected, using default: Tavily[/yellow]")
+        selected_engines = [{"name": "tavily", "priority": 1, "api_key_env": "TAVILY_API_KEY"}]
+
+    # Summary
+    console.print(f"\n[green]✓[/green] Configured {len(selected_engines)} search engine(s):")
+    for engine in selected_engines:
+        priority_badge = f"[cyan](priority {engine['priority']})[/cyan]"
+        console.print(f"  • {engine['name']} {priority_badge}")
+
+    # Build search config
+    search_config = []
+    for engine in selected_engines:
+        search_config.append({
+            "name": engine["name"].lower().replace(" ", ""),
+            "priority": engine["priority"],
+        })
+
+    return search_config
 
 
 async def _init_database(db_path: Path) -> None:

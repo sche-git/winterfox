@@ -250,62 +250,97 @@ def load_config(config_path: Path) -> ResearchConfig:
     return config
 
 
-def create_default_config(output_path: Path, project_name: str, north_star: str) -> None:
+def create_default_config(
+    output_path: Path,
+    project_name: str,
+    north_star: str,
+    agents_config: list[dict],
+    search_config: list[dict],
+) -> None:
     """
-    Create a default winterfox.toml configuration file.
+    Create a winterfox.toml configuration file with user-selected options.
 
     Args:
         output_path: Where to write winterfox.toml
         project_name: Project name
         north_star: North star mission statement
+        agents_config: List of agent configurations from interactive setup
+        search_config: List of search engine configurations from interactive setup
     """
+    # Build agents section
+    agents_toml = ""
+    for agent in agents_config:
+        role_comment = "  # Synthesizes results from all agents" if agent["role"] == "primary" else "  # Provides independent research"
+        api_key_map = {
+            "anthropic": "ANTHROPIC_API_KEY",
+            "moonshot": "MOONSHOT_API_KEY",
+            "openai": "OPENAI_API_KEY",
+            "google": "GOOGLE_API_KEY",
+            "xai": "XAI_API_KEY",
+        }
+        api_key_env = api_key_map.get(agent["provider"], "API_KEY")
+
+        agents_toml += f"""
+[[agents]]
+provider = "{agent['provider']}"
+model = "{agent['model']}"
+api_key_env = "{api_key_env}"
+supports_native_search = {str(agent.get('supports_native_search', False)).lower()}
+role = "{agent['role']}"{role_comment}
+"""
+
+    # Build search providers section
+    search_toml = ""
+    for search in search_config:
+        api_key_map = {
+            "tavily": "TAVILY_API_KEY",
+            "brave": "BRAVE_API_KEY",
+            "bravesearch": "BRAVE_API_KEY",
+            "serper": "SERPER_API_KEY",
+            "serper(google)": "SERPER_API_KEY",
+            "serpapi": "SERPAPI_KEY",
+            "serpapi(multi-engine)": "SERPAPI_KEY",
+            "duckduckgo": None,
+        }
+
+        # Normalize name
+        name_normalized = search["name"].lower().replace(" ", "").replace("(", "").replace(")", "")
+        if name_normalized == "serper":
+            name_normalized = "serper"
+        elif name_normalized == "serpapi" or name_normalized == "serpapmulti-engine":
+            name_normalized = "serpapi"
+        elif name_normalized == "bravesearch":
+            name_normalized = "brave"
+
+        api_key_env = api_key_map.get(name_normalized)
+
+        search_toml += f"""
+[[search.providers]]
+name = "{name_normalized}"
+"""
+        if api_key_env:
+            search_toml += f'api_key_env = "{api_key_env}"\n'
+        search_toml += f"""priority = {search['priority']}
+max_results = 10
+enabled = true
+"""
+
     template = f'''[project]
 name = "{project_name}"
 north_star = """
 {north_star}
 """
-
-# Primary research agent: Claude Opus 4.6
-[[agents]]
-provider = "anthropic"
-model = "claude-opus-4-20251120"
-api_key_env = "ANTHROPIC_API_KEY"
-supports_native_search = true
-use_subscription = false  # Set to true if using Anthropic Console subscription
-
-# Secondary agent: Kimi 2.5 (uncomment to enable multi-agent consensus)
-# [[agents]]
-# provider = "moonshot"
-# model = "kimi-2.5"
-# api_key_env = "MOONSHOT_API_KEY"
-# supports_native_search = false
-
+{agents_toml}
 [search]
-use_llm_native_search = true
-fallback_enabled = true
-
-# Primary search provider: Tavily
-[[search.providers]]
-name = "tavily"
-api_key_env = "TAVILY_API_KEY"
-priority = 1
-max_results = 10
-enabled = true
-
-# Fallback: Brave Search (uncomment to enable)
-# [[search.providers]]
-# name = "brave"
-# api_key_env = "BRAVE_API_KEY"
-# priority = 2
-# max_results = 8
-# enabled = false
-
+use_llm_native_search = true  # Use LLM's native search when available
+fallback_enabled = true  # Automatic fallback to next provider on failure
+{search_toml}
 [orchestrator]
 max_searches_per_agent = 25
 agent_timeout_seconds = 300
-confidence_discount = 0.7
-consensus_boost = 0.15
-similarity_threshold = 0.75
+confidence_discount = 0.7  # Initial skepticism (lower = more skeptical)
+consensus_boost = 0.15  # Confidence boost for multi-agent agreement
+similarity_threshold = 0.75  # Threshold for claim deduplication
 
 [storage]
 db_path = ".winterfox/graph.db"
@@ -314,7 +349,7 @@ git_auto_commit = true
 git_auto_push = false
 
 [multi_tenancy]
-enabled = false
+enabled = false  # Single workspace mode (CLI)
 workspace_id = "default"
 '''
 
