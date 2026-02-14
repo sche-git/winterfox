@@ -19,6 +19,7 @@ from tenacity import (
 )
 
 from ..protocol import AgentOutput, Evidence, Finding, SearchRecord, ToolDefinition
+from .base import AgentAuthenticationError
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,35 @@ class OpenRouterAdapter:
     def supports_native_search(self) -> bool:
         """Whether this model supports native search."""
         return self._supports_native_search
+
+    async def verify(self) -> None:
+        """Verify API key with a minimal request."""
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "HTTP-Referer": "https://github.com/naomi-kynes/winterfox",
+                        "X-Title": "Winterfox Research System",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "max_tokens": 1,
+                    },
+                )
+                if response.status_code in (401, 403):
+                    raise AgentAuthenticationError(
+                        provider="OpenRouter", api_key_env="OPENROUTER_API_KEY"
+                    )
+                response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (401, 403):
+                raise AgentAuthenticationError(
+                    provider="OpenRouter", api_key_env="OPENROUTER_API_KEY"
+                ) from e
+            raise
 
     @retry(
         retry=retry_if_exception_type((httpx.ConnectError, httpx.TimeoutException)),
@@ -126,6 +156,10 @@ class OpenRouterAdapter:
                     },
                 )
 
+                if response.status_code in (401, 403):
+                    raise AgentAuthenticationError(
+                        provider="OpenRouter", api_key_env="OPENROUTER_API_KEY"
+                    )
                 if response.status_code != 200:
                     error_text = response.text
                     raise RuntimeError(
