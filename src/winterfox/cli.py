@@ -106,7 +106,6 @@ def init(
 
         # Success message with API key reminders
         api_keys_needed = set()
-        openrouter_configured = False
         for agent in agents_config:
             if agent["provider"] == "anthropic":
                 api_keys_needed.add("ANTHROPIC_API_KEY")
@@ -119,9 +118,7 @@ def init(
             elif agent["provider"] == "xai":
                 api_keys_needed.add("XAI_API_KEY")
             elif agent["provider"] == "openrouter":
-                openrouter_configured = True
-                if not agent.get("_api_key_value"):
-                    api_keys_needed.add("OPENROUTER_API_KEY")
+                api_keys_needed.add("OPENROUTER_API_KEY")
 
         for search in search_config:
             if search["name"] == "tavily":
@@ -231,16 +228,14 @@ def _prompt_agent_setup() -> list[dict]:
             if llm["provider"] == "openrouter":
                 console.print("\n[bold cyan]OpenRouter selected![/bold cyan]")
                 console.print("OpenRouter provides access to many models through one API.")
-                console.print("You'll need an OpenRouter API key to fetch available models.\n")
-
-                api_key = typer.prompt("Enter your OpenRouter API key", hide_input=True)
+                console.print("Fetching available models (no API key needed for browsing)...\n")
 
                 try:
                     import asyncio
                     from .agents.adapters.openrouter import fetch_openrouter_models
 
                     with console.status("[bold green]Fetching models from OpenRouter..."):
-                        models = asyncio.run(fetch_openrouter_models(api_key))
+                        models = asyncio.run(fetch_openrouter_models())  # No API key needed
 
                     if not models:
                         console.print("[red]No models available from OpenRouter[/red]")
@@ -292,6 +287,7 @@ def _prompt_agent_setup() -> list[dict]:
 
                     # Let user select model
                     console.print("\n[bold]Select a model[/bold]")
+                    console.print("[dim]You'll need to set OPENROUTER_API_KEY env var before running[/dim]\n")
                     model_selection = typer.prompt("Model ID", default="1")
 
                     if model_selection not in model_map:
@@ -310,9 +306,6 @@ def _prompt_agent_setup() -> list[dict]:
                     llm["supports_native_search"] = any(
                         keyword in model_id_lower for keyword in ["claude", "gemini"]
                     )
-
-                    # Store API key temporarily for config generation
-                    llm["_api_key_value"] = api_key
 
                 except Exception as e:
                     console.print(f"[red]Failed to fetch OpenRouter models: {e}[/red]")
@@ -358,7 +351,6 @@ def _prompt_agent_setup() -> list[dict]:
             "model": llm["model"],
             "role": role,
             "supports_native_search": llm["supports_native_search"],
-            "_api_key_value": llm.get("_api_key_value"),  # For OpenRouter
         })
 
     # Summary

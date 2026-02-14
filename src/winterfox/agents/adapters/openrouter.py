@@ -299,20 +299,24 @@ class OpenRouterAdapter:
         return findings
 
 
-async def fetch_openrouter_models(api_key: str) -> list[dict[str, Any]]:
+async def fetch_openrouter_models(api_key: str | None = None) -> list[dict[str, Any]]:
     """
     Fetch available models from OpenRouter API.
 
     Args:
-        api_key: OpenRouter API key
+        api_key: Optional OpenRouter API key (not required for model discovery)
 
     Returns:
         List of model dictionaries with id, name, context_length, pricing, etc.
     """
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
     async with httpx.AsyncClient(timeout=10.0) as client:
         response = await client.get(
             "https://openrouter.ai/api/v1/models",
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers=headers,
         )
 
         if response.status_code != 200:
