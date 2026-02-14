@@ -340,8 +340,17 @@ def _prompt_search_setup() -> list[dict]:
     # Build search config
     search_config = []
     for engine in selected_engines:
+        # Normalize names to match config.SearchProviderConfig
+        name_normalized = engine["name"].lower().replace(" ", "").replace("(", "").replace(")", "")
+        if name_normalized == "bravesearch":
+            name_normalized = "brave"
+        elif name_normalized == "serpergoogle":
+            name_normalized = "serper"
+        elif name_normalized == "serpapimulti-engine":
+            name_normalized = "serpapi"
+
         search_config.append({
-            "name": engine["name"].lower().replace(" ", ""),
+            "name": name_normalized,
             "priority": engine["priority"],
         })
 
