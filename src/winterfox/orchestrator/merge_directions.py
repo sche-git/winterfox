@@ -88,16 +88,24 @@ async def merge_directions_into_graph(
                 )
             )
 
-            # Recalculate confidence (independent confirmation model)
-            # conf = 1 - (1-p1)(1-p2)
             old_conf = existing.confidence
             new_conf = direction.confidence * confidence_discount
-
-            combined = 1 - (1 - old_conf) * (1 - new_conf)
-            existing.confidence = min(0.95, combined)  # Cap at 0.95
+            if direction.stance == "support":
+                # Independent confirmation model: conf = 1 - (1-p1)(1-p2)
+                combined = 1 - (1 - old_conf) * (1 - new_conf)
+                existing.confidence = min(0.95, combined)
+            elif direction.stance == "disconfirm":
+                # Penalize confidence when evidence undermines this claim.
+                # Stronger disconfirm confidence produces larger reductions.
+                penalty = new_conf * 0.8
+                existing.confidence = max(0.05, old_conf * (1 - penalty))
+            else:
+                # Mixed evidence: gentle mean reversion toward new signal.
+                existing.confidence = min(0.95, max(0.05, old_conf * 0.8 + new_conf * 0.2))
 
             logger.debug(
-                f"Confidence update: {old_conf:.2f} + {new_conf:.2f} = {existing.confidence:.2f}"
+                f"Confidence update ({direction.stance}): "
+                f"{old_conf:.2f} with signal {new_conf:.2f} -> {existing.confidence:.2f}"
             )
 
             # Use longer claim if new direction is more detailed

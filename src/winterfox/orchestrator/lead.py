@@ -55,6 +55,8 @@ class Direction:
     reasoning: str  # Why this direction matters
     evidence_summary: str  # Brief summary of supporting evidence
     description: str  # Detailed one-page narrative for users/UI
+    stance: str = "mixed"  # support|mixed|disconfirm evidence alignment for this direction claim
+    direction_outcome: str = "pursue"  # pursue|complete lifecycle recommendation for this direction
     tags: list[str] | None = None
 
 
@@ -503,15 +505,24 @@ NOT directions (too granular):
      - `description`: long-form Markdown narrative (at least 220 words; target 350-700 words)
        - Use Markdown structure with short sections and bullets where helpful
        - Preserve meaningful line breaks between sections/points
-       - Include concrete items: context, key evidence, assumptions/risks, and next actions
+       - Include concrete items: context, key evidence, assumptions/risks, and Winterfox-executable next actions
+     - `stance`: one of:
+       - `support`: evidence supports this direction claim
+       - `mixed`: evidence is mixed/uncertain
+       - `disconfirm`: evidence undermines this direction claim
+     - `direction_outcome`: one of:
+       - `pursue`: keep active for future investigation
+       - `complete`: treat as sufficiently concluded/dead-end for now
    - Prefer deepening or revising existing strategic paths when evidence supports that
    - Propose genuinely new branches only when current evidence indicates clear unexplored opportunity
    - Do not branch for its own sake; avoid direction inflation
 
 2. **Assess Confidence**:
-   - High (0.8-1.0): Multiple agents agree, strong evidence
-   - Medium (0.5-0.7): Some agreement, decent evidence
-   - Low (0.0-0.4): Single source, weak evidence, speculative
+   - Interpret confidence as confidence in THIS direction claim.
+   - High (0.8-1.0): Strong corroboration for the claim
+   - Medium (0.5-0.7): Mixed but direction still plausible
+   - Low (0.0-0.4): Weak or contradictory support for this claim
+   - If stance is `disconfirm`, confidence should usually be low unless disconfirmation itself is strongly evidenced.
 
 3. **Determine Importance**:
    - High (0.8-1.0): Critical to mission, high impact
@@ -525,6 +536,7 @@ NOT directions (too granular):
 5. **Spot Contradictions**:
    - What disagreements exist?
    - Which claims conflict?
+   - If most evidence is negative against a direction claim, label stance=`disconfirm` and prefer direction_outcome=`complete`
 
 6. **Respect User Steering**:
    - If a cycle override instruction is present, bias synthesis priorities to that instruction
@@ -536,6 +548,24 @@ NOT directions (too granular):
    - It is valid to return a small set of focused directions if that best reflects the evidence
    - Prioritize clarity and strategic utility over quantity
 
+8. **Next Actions Must Be Winterfox-Executable**:
+   - In each direction description, the `## Next Actions` section must include ONLY actions
+     that can be executed in a future Winterfox cycle via web-based research.
+   - Allowed action types:
+     - Investigate a sub-direction with targeted web searches
+     - Assess feasibility by reviewing academic papers, benchmarks, standards, docs, filings, or technical reports
+     - Resolve contradictions across independent sources
+     - Gather specific missing evidence needed to raise/lower confidence
+   - Disallowed action types:
+     - Talk to customers, interviews, surveys, or sales calls
+     - Run product experiments, build prototypes, or engineering implementation
+     - Hiring, partnerships, procurement, or other offline operational tasks
+   - For each next action include:
+     - Objective: what the research action should prove/disprove
+     - Query seeds: 2-5 concrete web search query ideas
+     - Source targets: what source types to prioritize
+     - Completion signal: explicit evidence threshold for considering the action done
+
 ## Output Format
 
 Respond with ONLY this JSON structure:
@@ -543,7 +573,9 @@ Respond with ONLY this JSON structure:
   "directions": [
     {{
       "claim": "Short summary (one line, <=120 chars)",
-      "description": "Markdown one-page narrative (target 350-700 words) with sections like ## Context, ## Evidence, ## Risks/Assumptions, ## Next Actions",
+      "description": "Markdown one-page narrative (target 350-700 words) with sections like ## Context, ## Evidence, ## Risks/Assumptions, ## Next Actions, where Next Actions are Winterfox-executable research tasks only",
+      "stance": "support|mixed|disconfirm",
+      "direction_outcome": "pursue|complete",
       "confidence": 0.85,
       "importance": 0.9,
       "reasoning": "Why this direction matters and what it builds on",
@@ -616,6 +648,8 @@ Respond with ONLY the JSON structure (no markdown, no extra text).
                         importance=0.7,
                         reasoning="Fallback direction (synthesis parse failed)",
                         evidence_summary="Research agents completed investigation but synthesis failed to parse",
+                        stance="mixed",
+                        direction_outcome="pursue",
                     )
                 ],
                 synthesis_reasoning="Synthesis parse failed - using fallback direction",
@@ -632,9 +666,20 @@ Respond with ONLY the JSON structure (no markdown, no extra text).
                 description = str(dir_data["description"]).strip()
                 if not description:
                     raise ValueError("Direction description must be non-empty")
+                stance = str(dir_data.get("stance", "mixed")).strip().lower()
+                if stance not in {"support", "mixed", "disconfirm"}:
+                    stance = "mixed"
+                outcome = str(dir_data.get("direction_outcome", "pursue")).strip().lower()
+                if outcome not in {"pursue", "complete"}:
+                    outcome = "pursue"
+                if "direction_outcome" not in dir_data and stance == "disconfirm":
+                    # Bias toward faithful closure when model explicitly disconfirms a claim.
+                    outcome = "complete"
                 directions.append(Direction(
                     claim=dir_data["claim"],
                     description=description,
+                    stance=stance,
+                    direction_outcome=outcome,
                     confidence=float(dir_data["confidence"]),
                     importance=float(dir_data["importance"]),
                     reasoning=dir_data["reasoning"],
@@ -686,6 +731,8 @@ Respond with ONLY the JSON structure (no markdown, no extra text).
                         importance=0.7,
                         reasoning=f"Fallback direction (synthesis parse error: {e})",
                         evidence_summary="Research agents completed investigation but synthesis failed to parse",
+                        stance="mixed",
+                        direction_outcome="pursue",
                     )
                 ],
                 synthesis_reasoning=f"Synthesis parse error: {e}",
