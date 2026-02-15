@@ -36,12 +36,17 @@ const BubbleMapNode: React.FC<NodeProps<BubbleNodeData>> = ({ data }) => {
   const markdownDescription = description.replace(/\n/g, '  \n');
 
   return (
-    <div className={`relative ${data.dimmed ? 'opacity-30' : 'opacity-100'} max-w-[286px]`}>
-      <Handle type="target" position={Position.Left} className="h-2 w-2 border-none bg-transparent" />
+    <div className={`relative w-[286px] ${data.dimmed ? 'opacity-30' : 'opacity-100'}`}>
+      <Handle
+        type="target"
+        position={Position.Left}
+        className="h-px w-px border-none bg-transparent"
+        style={{ left: 0, top: '50%' }}
+      />
       <button
         type="button"
         onClick={() => data.onSelect(data.id)}
-        className="group relative rounded-xl text-left transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+        className="group relative block w-full rounded-xl text-left transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
         aria-label={`Open node: ${parsed.claim}`}
       >
         <div
@@ -101,7 +106,12 @@ const BubbleMapNode: React.FC<NodeProps<BubbleNodeData>> = ({ data }) => {
           </div>
         </div>
       </button>
-      <Handle type="source" position={Position.Right} className="h-2 w-2 border-none bg-transparent" />
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="h-px w-px border-none bg-transparent"
+        style={{ right: 0, top: '50%' }}
+      />
     </div>
   );
 };

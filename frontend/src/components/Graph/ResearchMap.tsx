@@ -4,6 +4,7 @@ import ReactFlow, {
   Controls,
   MiniMap,
   MarkerType,
+  Position,
   ReactFlowProvider,
   useEdgesState,
   useNodesState,
@@ -119,6 +120,8 @@ const ResearchMapCanvas: React.FC = () => {
         return {
           id: node.id,
           type: 'bubble',
+          sourcePosition: Position.Right,
+          targetPosition: Position.Left,
           data: {
             id: node.id,
             claim: node.claim,
