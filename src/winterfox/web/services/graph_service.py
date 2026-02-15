@@ -15,6 +15,7 @@ from ..models.api_models import (
     AgentSearchRecord,
     ContradictionItem,
     CycleDetailResponse,
+    DirectionNodeRef,
     CycleResponse,
     CyclesListResponse,
     EvidenceItem,
@@ -482,6 +483,36 @@ class GraphService:
             elif isinstance(c, str):
                 contradictions.append(ContradictionItem(description=c))
 
+        direction_node_refs = [
+            DirectionNodeRef(
+                claim=str(ref.get("claim", "")),
+                node_id=str(ref.get("node_id", "")),
+                action="created" if str(ref.get("action", "")).lower() == "created" else "updated",
+            )
+            for ref in (data.get("direction_node_refs", []) or [])
+            if isinstance(ref, dict) and ref.get("node_id")
+        ]
+
+        # Backfill for legacy cycle rows with no explicit refs:
+        # resolve exact-claim matches among target node's current children.
+        if not direction_node_refs and consensus_list and data.get("target_node_id"):
+            target = await graph.get_node(str(data["target_node_id"]))
+            if target:
+                children = await graph.get_children(target.id)
+
+                def norm_claim(text: str) -> str:
+                    return " ".join(
+                        "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in text.lower()).split()
+                    )
+
+                child_map = {norm_claim(child.claim): child.id for child in children}
+                for claim in consensus_list:
+                    node_id = child_map.get(norm_claim(claim))
+                    if node_id:
+                        direction_node_refs.append(
+                            DirectionNodeRef(claim=claim, node_id=node_id, action="updated")
+                        )
+
         return CycleDetailResponse(
             id=data["cycle_id"],
             target_node_id=data.get("target_node_id", ""),
@@ -496,6 +527,7 @@ class GraphService:
             consensus_findings=consensus_list,
             consensus_directions=consensus_list,
             contradictions=contradictions,
+            direction_node_refs=direction_node_refs,
             synthesis_reasoning=data.get("synthesis_reasoning", "") or "",
             selection_strategy=data.get("selection_strategy"),
             selection_reasoning=data.get("selection_reasoning"),

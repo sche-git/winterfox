@@ -2,8 +2,10 @@
  * Research Storyline page - vertical narrative of cycle progress.
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { useCycleStore } from '../../stores/cycleStore';
+import { useUIStore } from '../../stores/uiStore';
+import { useGraphStore } from '../../stores/graphStore';
 import { api } from '../../services/api';
 import type { Cycle, CycleDetail } from '../../types/api';
 import { Badge } from '@/components/ui/badge';
@@ -19,18 +21,31 @@ import {
   Sparkles,
   Bot,
   Search,
+  ArrowRight,
 } from 'lucide-react';
 
 type StoryFilter = 'all' | 'high_impact' | 'high_cost' | 'failures';
 type CyclePanel = 'insights' | 'raw' | 'context';
 
+function normalizeClaim(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 const HistoryPage: React.FC = () => {
   const cycles = useCycleStore((s) => s.recentCycles);
+  const setCurrentPage = useUIStore((s) => s.setCurrentPage);
+  const selectNode = useGraphStore((s) => s.selectNode);
+  const loadTree = useGraphStore((s) => s.loadTree);
   const [filter, setFilter] = useState<StoryFilter>('all');
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   const [details, setDetails] = useState<Record<number, CycleDetail>>({});
   const [loading, setLoading] = useState<Record<number, boolean>>({});
   const [panelByCycle, setPanelByCycle] = useState<Record<number, CyclePanel>>({});
+  const [directionNodeMapByCycle, setDirectionNodeMapByCycle] = useState<Record<number, Record<string, string>>>({});
 
   const avgCost = useMemo(() => {
     if (cycles.length === 0) return 0;
@@ -59,6 +74,13 @@ const HistoryPage: React.FC = () => {
       try {
         const detail = await api.getCycle(cycle.id);
         setDetails((prev) => ({ ...prev, [cycle.id]: detail }));
+
+        const directionMap: Record<string, string> = {};
+        detail.direction_node_refs.forEach((ref) => {
+          if (!ref.node_id) return;
+          directionMap[normalizeClaim(ref.claim)] = ref.node_id;
+        });
+        setDirectionNodeMapByCycle((prev) => ({ ...prev, [cycle.id]: directionMap }));
       } finally {
         setLoading((prev) => ({ ...prev, [cycle.id]: false }));
       }
@@ -89,6 +111,12 @@ const HistoryPage: React.FC = () => {
     { id: 'high_cost' as const, label: 'High Cost' },
     { id: 'failures' as const, label: 'Failures' },
   ];
+
+  const openDirectionOnMap = useCallback(async (nodeId: string) => {
+    setCurrentPage('graph');
+    await loadTree();
+    selectNode(nodeId);
+  }, [setCurrentPage, selectNode, loadTree]);
 
   return (
     <div className="h-full overflow-auto p-6 md:p-8">
@@ -127,6 +155,14 @@ const HistoryPage: React.FC = () => {
             const directionCreated = detail?.directions_created ?? 0;
             const directionUpdated = detail?.directions_updated ?? 0;
             const consensus = detail?.consensus_directions ?? [];
+            const directionsCreated = Array.from(
+              new Set(
+                consensus
+                  .map((item) => item.trim())
+                  .filter((item) => item.length > 0)
+              )
+            );
+            const directionNodeMap = directionNodeMapByCycle[cycle.id] ?? {};
             const panel = panelByCycle[cycle.id] ?? 'insights';
             const contextContent = detail?.research_context?.trim() ?? '';
 
@@ -173,13 +209,15 @@ const HistoryPage: React.FC = () => {
                     </button>
                   </div>
 
-                  <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-                    <Badge variant="secondary" className="font-normal text-muted-foreground">+{directionCreated || cycle.directions_count} directions</Badge>
-                    <Badge variant="secondary" className="font-normal text-muted-foreground">~{directionUpdated} updates</Badge>
-                    <Badge variant="outline" className="font-normal text-muted-foreground">Lead ${cycle.lead_llm_cost_usd.toFixed(3)}</Badge>
-                    <Badge variant="outline" className="font-normal text-muted-foreground">Research ${cycle.research_agents_cost_usd.toFixed(3)}</Badge>
-                    <Badge variant="outline" className="font-normal text-muted-foreground">{formatDuration(cycle.duration_seconds)}</Badge>
-                  </div>
+                  {!isOpen && (
+                    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                      <Badge variant="secondary" className="font-normal text-muted-foreground">+{directionCreated || cycle.directions_count} directions</Badge>
+                      <Badge variant="secondary" className="font-normal text-muted-foreground">~{directionUpdated} updates</Badge>
+                      <Badge variant="outline" className="font-normal text-muted-foreground">Lead ${cycle.lead_llm_cost_usd.toFixed(3)}</Badge>
+                      <Badge variant="outline" className="font-normal text-muted-foreground">Research ${cycle.research_agents_cost_usd.toFixed(3)}</Badge>
+                      <Badge variant="outline" className="font-normal text-muted-foreground">{formatDuration(cycle.duration_seconds)}</Badge>
+                    </div>
+                  )}
 
                   {isOpen && (
                     <div className="mt-4 space-y-4 border-t pt-4 animate-[fadeIn_220ms_ease-out]">
@@ -212,51 +250,76 @@ const HistoryPage: React.FC = () => {
                           </div>
 
                           {panel === 'insights' ? (
-                            <>
-                              {detail.selection_reasoning && (
-                                <div>
-                                  <p className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                                    <Sparkles className="h-3 w-3" /> Lead Decision
+                            <div
+                              className={
+                                directionsCreated.length > 0
+                                  ? 'grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_320px]'
+                                  : 'space-y-4'
+                              }
+                            >
+                              <div className="space-y-4">
+                                {detail.selection_reasoning && (
+                                  <div>
+                                    <p className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                      <Sparkles className="h-3 w-3" /> Lead Decision
+                                    </p>
+                                    <MarkdownContent content={detail.selection_reasoning} />
+                                  </div>
+                                )}
+
+                                {detail.synthesis_reasoning && (
+                                  <div>
+                                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Synthesis</p>
+                                    <div className="line-clamp-5">
+                                      <MarkdownContent content={detail.synthesis_reasoning} />
+                                    </div>
+                                  </div>
+                                )}
+
+                                <div className="flex flex-wrap items-center gap-2 text-xs">
+                                  <Badge variant="outline" className="font-normal text-muted-foreground">
+                                    <Bot className="mr-1 h-3 w-3" /> Agents {detail.agent_count}
+                                  </Badge>
+                                  <Badge variant="outline" className="font-normal text-muted-foreground">
+                                    <Search className="mr-1 h-3 w-3" />
+                                    Searches {detail.agent_outputs.reduce((sum, agent) => sum + agent.searches_performed, 0)}
+                                  </Badge>
+                                  <Badge variant="outline" className="font-normal text-muted-foreground">
+                                    Tokens <span className="ml-1 tabular-nums">{detail.total_tokens.toLocaleString()}</span>
+                                  </Badge>
+                                </div>
+                              </div>
+
+                              {directionsCreated.length > 0 && (
+                                <div className="rounded-md border p-3 md:h-fit">
+                                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                    Directions Created
                                   </p>
-                                  <p className="text-sm leading-relaxed">{detail.selection_reasoning}</p>
-                                </div>
-                              )}
-
-                              {detail.synthesis_reasoning && (
-                                <div>
-                                  <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Synthesis</p>
-                                  <p className="line-clamp-5 text-sm leading-relaxed text-foreground">{detail.synthesis_reasoning}</p>
-                                </div>
-                              )}
-
-                              {consensus.length > 0 && (
-                                <div>
-                                  <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Key Learnings</p>
                                   <ul className="space-y-1">
-                                    {consensus.slice(0, 3).map((item, i) => (
-                                      <li key={i} className="rounded-md bg-muted/60 px-2 py-1.5 text-sm">{item}</li>
+                                    {directionsCreated.map((direction, i) => (
+                                      <li key={`${cycle.id}-${i}`}>
+                                        {(() => {
+                                          const nodeId = directionNodeMap[normalizeClaim(direction)] ?? null;
+                                          return (
+                                        <button
+                                          onClick={() => nodeId && openDirectionOnMap(nodeId)}
+                                          disabled={!nodeId}
+                                          className={`flex w-full items-center gap-1 rounded-md border bg-background px-2 py-1.5 text-left text-sm transition-colors ${
+                                            nodeId ? 'hover:bg-muted' : 'cursor-not-allowed opacity-60'
+                                          }`}
+                                          title={nodeId ? 'Open in Research Map' : 'No node ID mapped for this direction'}
+                                        >
+                                          <span className="line-clamp-2 flex-1">{direction}</span>
+                                          <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                        </button>
+                                          );
+                                        })()}
+                                      </li>
                                     ))}
                                   </ul>
                                 </div>
                               )}
-
-                              <div className="grid grid-cols-1 gap-2 text-xs text-muted-foreground md:grid-cols-3">
-                                <div className="rounded-md border p-2">
-                                  <div className="flex items-center gap-1"><Bot className="h-3 w-3" /> Agents</div>
-                                  <div className="mt-1 text-foreground">{detail.agent_count}</div>
-                                </div>
-                                <div className="rounded-md border p-2">
-                                  <div className="flex items-center gap-1"><Search className="h-3 w-3" /> Searches</div>
-                                  <div className="mt-1 text-foreground">
-                                    {detail.agent_outputs.reduce((sum, agent) => sum + agent.searches_performed, 0)}
-                                  </div>
-                                </div>
-                                <div className="rounded-md border p-2">
-                                  <div>Tokens</div>
-                                  <div className="mt-1 text-foreground tabular-nums">{detail.total_tokens.toLocaleString()}</div>
-                                </div>
-                              </div>
-                            </>
+                            </div>
                           ) : panel === 'raw' ? (
                             <div className="space-y-3">
                               {detail.agent_outputs.map((agent, i) => (
@@ -287,6 +350,16 @@ const HistoryPage: React.FC = () => {
                       ) : (
                         <p className="text-xs text-muted-foreground">Unable to load details for this cycle.</p>
                       )}
+                    </div>
+                  )}
+
+                  {isOpen && (
+                    <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-3 text-xs">
+                      <Badge variant="secondary" className="font-normal text-muted-foreground">+{directionCreated || cycle.directions_count} directions</Badge>
+                      <Badge variant="secondary" className="font-normal text-muted-foreground">~{directionUpdated} updates</Badge>
+                      <Badge variant="outline" className="font-normal text-muted-foreground">Lead ${cycle.lead_llm_cost_usd.toFixed(3)}</Badge>
+                      <Badge variant="outline" className="font-normal text-muted-foreground">Research ${cycle.research_agents_cost_usd.toFixed(3)}</Badge>
+                      <Badge variant="outline" className="font-normal text-muted-foreground">{formatDuration(cycle.duration_seconds)}</Badge>
                     </div>
                   )}
                 </div>

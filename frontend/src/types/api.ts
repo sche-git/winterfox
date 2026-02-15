@@ -137,6 +137,12 @@ export interface ContradictionItem {
   description: string;
 }
 
+export interface DirectionNodeRef {
+  claim: string;
+  node_id: string;
+  action: 'created' | 'updated';
+}
+
 export interface CycleDetail {
   id: number;
   target_node_id: string;
@@ -151,6 +157,7 @@ export interface CycleDetail {
   findings_skipped: number;
   consensus_findings: string[];
   contradictions: ContradictionItem[];
+  direction_node_refs: DirectionNodeRef[];
   synthesis_reasoning: string;
   selection_strategy: 'EXPLORE' | 'DEEPEN' | 'CHALLENGE' | null;
   selection_reasoning: string | null;

@@ -175,6 +175,14 @@ class ContradictionItem(BaseModel):
     description: str = ""
 
 
+class DirectionNodeRef(BaseModel):
+    """Resolved graph node reference for a synthesized direction."""
+
+    claim: str
+    node_id: str
+    action: Literal["created", "updated"]
+
+
 class CycleDetailResponse(BaseModel):
     """Detailed cycle information."""
 
@@ -191,6 +199,7 @@ class CycleDetailResponse(BaseModel):
     consensus_findings: list[str] = Field(default_factory=list)
     consensus_directions: list[str] = Field(default_factory=list)
     contradictions: list[ContradictionItem] = Field(default_factory=list)
+    direction_node_refs: list[DirectionNodeRef] = Field(default_factory=list)
     synthesis_reasoning: str = ""
     selection_strategy: str | None = None
     selection_reasoning: str | None = None

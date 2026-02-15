@@ -9,6 +9,7 @@ This is the critical knowledge compounding step for the Lead LLM architecture:
 """
 
 import logging
+from typing import Any
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -26,7 +27,7 @@ async def merge_directions_into_graph(
     cycle_id: int,
     similarity_threshold: float = 0.75,
     confidence_discount: float = 0.7,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """
     Merge Lead LLM directions into the knowledge graph.
 
@@ -48,14 +49,15 @@ async def merge_directions_into_graph(
         confidence_discount: Discount factor for initial confidence (0.7)
 
     Returns:
-        Stats dict with created/updated/skipped counts
+        Stats dict with created/updated/skipped counts and node refs
     """
     from ..graph.operations import calculate_claim_similarity
 
-    stats = {
+    stats: dict[str, Any] = {
         "created": 0,
         "updated": 0,
         "skipped": 0,
+        "direction_node_refs": [],
     }
 
     for direction in directions:
@@ -120,10 +122,17 @@ async def merge_directions_into_graph(
 
             # Update cycle tracking
             existing.updated_by_cycle = cycle_id
+            if direction.direction_outcome == "complete":
+                existing.status = "completed"
 
             await graph.update_node(existing)
 
             stats["updated"] += 1
+            stats["direction_node_refs"].append({
+                "claim": direction.claim,
+                "node_id": existing.id,
+                "action": "updated",
+            })
 
         else:
             # Create new direction
@@ -152,6 +161,7 @@ async def merge_directions_into_graph(
                 created_by_cycle=cycle_id,
                 evidence=evidence_list,
                 tags=direction.tags or [],
+                status="completed" if direction.direction_outcome == "complete" else "active",
                 node_type="direction",  # All nodes are directions
             )
 
@@ -161,6 +171,11 @@ async def merge_directions_into_graph(
             )
 
             stats["created"] += 1
+            stats["direction_node_refs"].append({
+                "claim": direction.claim,
+                "node_id": new_node.id,
+                "action": "created",
+            })
 
     logger.info(
         f"Merge complete: {stats['created']} created, {stats['updated']} updated, "

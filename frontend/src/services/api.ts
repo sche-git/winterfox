@@ -130,6 +130,7 @@ class WinterfoxAPI {
       directions_updated: detail.directions_updated ?? detail.findings_updated ?? 0,
       directions_skipped: detail.directions_skipped ?? detail.findings_skipped ?? 0,
       consensus_directions: detail.consensus_directions ?? detail.consensus_findings ?? [],
+      direction_node_refs: detail.direction_node_refs ?? [],
       lead_llm_cost_usd: detail.lead_llm_cost_usd ?? 0,
       research_agents_cost_usd:
         (detail.research_agents_cost_usd ?? 0) > 0

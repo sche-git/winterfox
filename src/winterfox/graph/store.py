@@ -183,6 +183,7 @@ CREATE TABLE IF NOT EXISTS cycle_outputs (
         synthesis_reasoning TEXT,
         consensus_findings TEXT,
         contradictions TEXT,
+        direction_node_refs TEXT,
         findings_created INTEGER DEFAULT 0,
         findings_updated INTEGER DEFAULT 0,
         findings_skipped INTEGER DEFAULT 0,
@@ -401,6 +402,7 @@ class KnowledgeGraph:
                 "ALTER TABLE cycle_outputs ADD COLUMN selection_strategy TEXT",
                 "ALTER TABLE cycle_outputs ADD COLUMN selection_reasoning TEXT",
                 "ALTER TABLE cycle_outputs ADD COLUMN research_context TEXT",
+                "ALTER TABLE cycle_outputs ADD COLUMN direction_node_refs TEXT",
                 "ALTER TABLE agent_outputs ADD COLUMN raw_text TEXT NOT NULL DEFAULT ''",
             ]
             for migration in migrations:
@@ -845,7 +847,7 @@ class KnowledgeGraph:
         target_node: KnowledgeNode,
         agent_outputs: list[Any],
         synthesis_result: Any | None,
-        merge_stats: dict[str, int],
+        merge_stats: dict[str, Any],
         duration_seconds: float,
         total_cost_usd: float,
         lead_llm_cost_usd: float = 0.0,
@@ -885,6 +887,7 @@ class KnowledgeGraph:
         synthesis_reasoning = None
         consensus_findings = []
         contradictions = []
+        direction_node_refs = []
 
         if synthesis_result:
             synthesis_reasoning = synthesis_result.synthesis_reasoning
@@ -896,10 +899,12 @@ class KnowledgeGraph:
                 getattr(synthesis_result, "consensus_directions", []),
             )
             contradictions = getattr(synthesis_result, "contradictions", [])
+            direction_node_refs = merge_stats.get("direction_node_refs", [])
 
         # Serialize data for storage
         consensus_findings_json = json.dumps(consensus_findings) if consensus_findings else None
         contradictions_json = json.dumps(contradictions) if contradictions else None
+        direction_node_refs_json = json.dumps(direction_node_refs) if direction_node_refs else None
 
         # Calculate total tokens
         total_tokens = sum(output.total_tokens for output in agent_outputs)
@@ -911,13 +916,13 @@ class KnowledgeGraph:
                 INSERT INTO cycle_outputs (
                     cycle_id, workspace_id, target_node_id, target_claim,
                     research_context,
-                    synthesis_reasoning, consensus_findings, contradictions,
+                    synthesis_reasoning, consensus_findings, contradictions, direction_node_refs,
                     findings_created, findings_updated, findings_skipped,
                     agent_count, total_tokens, total_cost_usd,
                     lead_llm_cost_usd, research_agents_cost_usd,
                     duration_seconds,
                     success, error_message, selection_strategy, selection_reasoning
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     cycle_id,
@@ -928,6 +933,7 @@ class KnowledgeGraph:
                     synthesis_reasoning,
                     consensus_findings_json,
                     contradictions_json,
+                    direction_node_refs_json,
                     merge_stats.get("created", 0),
                     merge_stats.get("updated", 0),
                     merge_stats.get("skipped", 0),
@@ -1058,7 +1064,7 @@ class KnowledgeGraph:
                 """
                 SELECT
                     id, cycle_id, workspace_id, target_node_id, target_claim,
-                    research_context, synthesis_reasoning, consensus_findings, contradictions,
+                    research_context, synthesis_reasoning, consensus_findings, contradictions, direction_node_refs,
                     findings_created, findings_updated, findings_skipped,
                     agent_count, total_tokens, total_cost_usd,
                     lead_llm_cost_usd, research_agents_cost_usd,
@@ -1088,20 +1094,21 @@ class KnowledgeGraph:
                 "synthesis_reasoning": row[6],
                 "consensus_findings": json.loads(row[7]) if row[7] else [],
                 "contradictions": json.loads(row[8]) if row[8] else [],
-                "findings_created": row[9],
-                "findings_updated": row[10],
-                "findings_skipped": row[11],
-                "agent_count": row[12],
-                "total_tokens": row[13],
-                "total_cost_usd": row[14],
-                "lead_llm_cost_usd": row[15],
-                "research_agents_cost_usd": row[16],
-                "duration_seconds": row[17],
-                "success": bool(row[18]),
-                "error_message": row[19],
-                "created_at": row[20],
-                "selection_strategy": row[21],
-                "selection_reasoning": row[22],
+                "direction_node_refs": json.loads(row[9]) if row[9] else [],
+                "findings_created": row[10],
+                "findings_updated": row[11],
+                "findings_skipped": row[12],
+                "agent_count": row[13],
+                "total_tokens": row[14],
+                "total_cost_usd": row[15],
+                "lead_llm_cost_usd": row[16],
+                "research_agents_cost_usd": row[17],
+                "duration_seconds": row[18],
+                "success": bool(row[19]),
+                "error_message": row[20],
+                "created_at": row[21],
+                "selection_strategy": row[22],
+                "selection_reasoning": row[23],
             }
 
             # Get agent outputs
