@@ -4,6 +4,8 @@ import { parseClaimType } from '@/lib/nodeTypes';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
+type NodeStatus = 'active' | 'archived' | 'merged';
+
 type BubbleNodeData = {
   id: string;
   claim: string;
@@ -11,6 +13,7 @@ type BubbleNodeData = {
   confidence: number;
   importance: number;
   nodeType: string | null;
+  status: NodeStatus | null;
   selected: boolean;
   focused: boolean;
   dimmed: boolean;
@@ -22,6 +25,16 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 const METRIC_HEIGHT = 34;
+const STATUS_LABEL: Record<NodeStatus, string> = {
+  active: 'Active',
+  archived: 'Archived',
+  merged: 'Merged',
+};
+const STATUS_CLASS: Record<NodeStatus, string> = {
+  active: 'border-emerald-300 bg-emerald-50 text-emerald-700',
+  archived: 'border-amber-300 bg-amber-50 text-amber-700',
+  merged: 'border-slate-300 bg-slate-100 text-slate-700',
+};
 
 const BubbleMapNode: React.FC<NodeProps<BubbleNodeData>> = ({ data }) => {
   const parsed = parseClaimType(data.claim, data.nodeType);
@@ -82,7 +95,14 @@ const BubbleMapNode: React.FC<NodeProps<BubbleNodeData>> = ({ data }) => {
             </div>
 
             <div className="min-w-0 flex-1">
-              <p className="line-clamp-1 text-xs font-semibold leading-snug text-foreground">{label}</p>
+              <div className="flex items-center gap-1.5">
+                <p className="min-w-0 flex-1 truncate text-xs font-semibold leading-snug text-foreground">{label}</p>
+                {data.status && (
+                  <span className={`rounded border px-1.5 py-0.5 text-[10px] font-medium ${STATUS_CLASS[data.status]}`}>
+                    {STATUS_LABEL[data.status]}
+                  </span>
+                )}
+              </div>
               {markdownDescription && (
                 <div className="mt-1 max-h-[84px] overflow-hidden text-left text-[11px] leading-snug text-muted-foreground">
                   <ReactMarkdown

@@ -13,6 +13,13 @@ interface MarkdownContentProps {
 }
 
 const MarkdownContent: React.FC<MarkdownContentProps> = ({ content, className }) => {
+  const normalizedContent = content
+    .replace(/\r\n/g, '\n')
+    // Promote inline separators (e.g. "foo. --- bar") into standalone thematic breaks.
+    .replace(/(\S)\s+(---|\*\*\*|___)\s+(\S)/g, '$1\n\n---\n\n$3')
+    // Normalize separator-only lines so they consistently render as thematic breaks.
+    .replace(/^\s*([-*_])(?:\s*\1){2,}\s*$/gm, '---');
+
   return (
     <div className={cn('text-sm leading-relaxed', className)}>
       <ReactMarkdown
@@ -65,6 +72,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({ content, className })
               {children}
             </blockquote>
           ),
+          hr: () => <hr className="my-3 border-border" />,
           a: ({ href, children }) => (
             <a
               href={href}
@@ -90,7 +98,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({ content, className })
           ),
         }}
       >
-        {content}
+        {normalizedContent}
       </ReactMarkdown>
     </div>
   );
