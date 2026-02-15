@@ -14,6 +14,7 @@ type BubbleNodeData = {
   importance: number;
   nodeType: string | null;
   status: NodeStatus | null;
+  matched: boolean;
   selected: boolean;
   focused: boolean;
   dimmed: boolean;
@@ -27,7 +28,7 @@ function clamp(value: number, min: number, max: number): number {
 const METRIC_HEIGHT = 34;
 const STATUS_LABEL: Record<NodeStatus, string> = {
   active: 'Active',
-  archived: 'Archived',
+  archived: 'Completed',
   merged: 'Merged',
 };
 const STATUS_CLASS: Record<NodeStatus, string> = {
@@ -63,12 +64,14 @@ const BubbleMapNode: React.FC<NodeProps<BubbleNodeData>> = ({ data }) => {
         aria-label={`Open node: ${parsed.claim}`}
       >
         <div
-          className={`relative rounded-xl border bg-card px-3 py-2.5 shadow-sm transition-all ${
+          className={`relative rounded-xl border px-3 py-2.5 shadow-sm transition-all ${
             data.selected
-              ? 'border-cyan-500 shadow-[0_0_0_1px_rgba(6,182,212,0.35)]'
-              : data.focused
-                ? 'border-slate-400'
-                : 'border-border group-hover:border-slate-400'
+              ? 'border-cyan-500 bg-card shadow-[0_0_0_1px_rgba(6,182,212,0.35)]'
+              : data.matched
+                ? 'border-amber-500 bg-card shadow-[0_0_0_1px_rgba(245,158,11,0.38)]'
+                : data.focused
+                  ? 'border-slate-400 bg-card'
+                  : 'border-border bg-card group-hover:border-slate-400'
           }`}
           style={{ width: `${width}px` }}
         >

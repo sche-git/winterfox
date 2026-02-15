@@ -17,11 +17,8 @@ import 'reactflow/dist/style.css';
 import { Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useGraphStore } from '../../stores/graphStore';
-import { api } from '../../services/api';
-import type { NodeTreeItem, Node as ApiNode } from '../../types/api';
+import type { NodeTreeItem } from '../../types/api';
 import BubbleMapNode from './BubbleMapNode';
-
-type NodeStatus = ApiNode['status'];
 
 type BubbleNodeData = {
   id: string;
@@ -30,7 +27,8 @@ type BubbleNodeData = {
   confidence: number;
   importance: number;
   nodeType: string | null;
-  status: NodeStatus | null;
+  status: 'active' | 'archived' | 'merged' | null;
+  matched: boolean;
   selected: boolean;
   focused: boolean;
   dimmed: boolean;
@@ -52,7 +50,6 @@ const DEPTH_GAP = 340;
 const INTRA_CLUSTER_GAP = 124;
 const INTER_CLUSTER_GAP = 142;
 const INTER_ROOT_CLUSTER_GAP = 220;
-const STATUS_ORDER: NodeStatus[] = ['active', 'archived', 'merged'];
 
 function flattenTree(roots: NodeTreeItem[]): FlattenedItem[] {
   const out: FlattenedItem[] = [];
@@ -125,65 +122,9 @@ const ResearchMapCanvas: React.FC = () => {
   const [query, setQuery] = useState('');
   const [minConfidence, setMinConfidence] = useState(0);
   const [focusMode, setFocusMode] = useState(true);
-  const [statusById, setStatusById] = useState<Record<string, NodeStatus>>({});
   const { fitView, setCenter, getZoom } = useReactFlow();
 
   const queryLower = query.trim().toLowerCase();
-  const treeNodeIds = useMemo(() => flattenTree(tree).map((item) => item.node.id), [tree]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadStatuses = async () => {
-      if (treeNodeIds.length === 0) {
-        setStatusById({});
-        return;
-      }
-
-      const ids = new Set(treeNodeIds);
-      const nextStatusById: Record<string, NodeStatus> = {};
-      let foundCount = 0;
-
-      try {
-        for (const status of STATUS_ORDER) {
-          let offset = 0;
-          while (!cancelled) {
-            const response = await api.getNodes({
-              status,
-              limit: 500,
-              offset,
-              sort: 'updated_at',
-            });
-
-            response.nodes.forEach((node) => {
-              if (!ids.has(node.id) || nextStatusById[node.id]) return;
-              nextStatusById[node.id] = node.status;
-              foundCount += 1;
-            });
-
-            offset += response.nodes.length;
-
-            if (foundCount >= ids.size || response.nodes.length === 0 || offset >= response.total) {
-              break;
-            }
-          }
-
-          if (foundCount >= ids.size || cancelled) break;
-        }
-
-        if (!cancelled) {
-          setStatusById(nextStatusById);
-        }
-      } catch (error) {
-        console.error('Failed to load node statuses for research map:', error);
-      }
-    };
-
-    void loadStatuses();
-    return () => {
-      cancelled = true;
-    };
-  }, [treeNodeIds]);
 
   const computed = useMemo(() => {
     const flat = flattenTree(tree);
@@ -210,7 +151,8 @@ const ResearchMapCanvas: React.FC = () => {
             confidence: node.confidence,
             importance: node.importance,
             nodeType: node.node_type,
-            status: statusById[node.id] ?? null,
+            status: node.status ?? 'active',
+            matched: queryLower.length > 0 && matchesSearch,
             selected: selectedNodeId === node.id,
             focused,
             dimmed,
@@ -251,7 +193,7 @@ const ResearchMapCanvas: React.FC = () => {
       });
 
     return { nodes, edges };
-  }, [tree, selectedNodeId, selectNode, queryLower, minConfidence, focusMode, statusById]);
+  }, [tree, selectedNodeId, selectNode, queryLower, minConfidence, focusMode]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<BubbleNodeData>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);

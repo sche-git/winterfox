@@ -755,39 +755,59 @@ class KnowledgeGraph:
         logger.debug(f"Retrieved {len(nodes)} active nodes")
         return nodes
 
-    async def get_root_nodes(self) -> list[KnowledgeNode]:
-        """Get all root nodes (nodes with no parent) in the workspace."""
+    async def get_root_nodes(self, include_inactive: bool = False) -> list[KnowledgeNode]:
+        """Get root nodes (nodes with no parent) in the workspace."""
         if not self._initialized:
             await self.initialize()
 
         async with self._get_db() as db:
-            cursor = await db.execute(
-                """
-                SELECT data FROM nodes
-                WHERE workspace_id = ? AND parent_id IS NULL AND status = 'active'
-                ORDER BY importance DESC, updated_at DESC
-                """,
-                (self.workspace_id,),
-            )
+            if include_inactive:
+                cursor = await db.execute(
+                    """
+                    SELECT data FROM nodes
+                    WHERE workspace_id = ? AND parent_id IS NULL
+                    ORDER BY importance DESC, updated_at DESC
+                    """,
+                    (self.workspace_id,),
+                )
+            else:
+                cursor = await db.execute(
+                    """
+                    SELECT data FROM nodes
+                    WHERE workspace_id = ? AND parent_id IS NULL AND status = 'active'
+                    ORDER BY importance DESC, updated_at DESC
+                    """,
+                    (self.workspace_id,),
+                )
             rows = await cursor.fetchall()
 
         nodes = [KnowledgeNode(**json.loads(row[0])) for row in rows]
         return nodes
 
-    async def get_children(self, node_id: str) -> list[KnowledgeNode]:
-        """Get all child nodes of a given node."""
+    async def get_children(self, node_id: str, include_inactive: bool = False) -> list[KnowledgeNode]:
+        """Get child nodes of a given node."""
         if not self._initialized:
             await self.initialize()
 
         async with self._get_db() as db:
-            cursor = await db.execute(
-                """
-                SELECT data FROM nodes
-                WHERE workspace_id = ? AND parent_id = ? AND status = 'active'
-                ORDER BY confidence DESC, updated_at DESC
-                """,
-                (self.workspace_id, node_id),
-            )
+            if include_inactive:
+                cursor = await db.execute(
+                    """
+                    SELECT data FROM nodes
+                    WHERE workspace_id = ? AND parent_id = ?
+                    ORDER BY confidence DESC, updated_at DESC
+                    """,
+                    (self.workspace_id, node_id),
+                )
+            else:
+                cursor = await db.execute(
+                    """
+                    SELECT data FROM nodes
+                    WHERE workspace_id = ? AND parent_id = ? AND status = 'active'
+                    ORDER BY confidence DESC, updated_at DESC
+                    """,
+                    (self.workspace_id, node_id),
+                )
             rows = await cursor.fetchall()
 
         return [KnowledgeNode(**json.loads(row[0])) for row in rows]

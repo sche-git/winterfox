@@ -74,14 +74,7 @@ class GraphService:
 
     def _node_to_response(self, node: KnowledgeNode) -> NodeResponse:
         """Convert KnowledgeNode to NodeResponse."""
-        # Map internal statuses to API-compatible ones
-        status_map = {
-            "killed": "archived",
-            "closed": "archived",
-            "completed": "archived",
-            "speculative": "active",
-        }
-        api_status = status_map.get(node.status, node.status)
+        api_status = self._map_status(node.status)
 
         return NodeResponse(
             id=node.id,
@@ -108,6 +101,17 @@ class GraphService:
             created_at=node.created_at,
             updated_at=node.updated_at,
         )
+
+    @staticmethod
+    def _map_status(status: str) -> str:
+        """Map internal statuses to API-compatible status values."""
+        status_map = {
+            "killed": "archived",
+            "closed": "archived",
+            "completed": "archived",
+            "speculative": "active",
+        }
+        return status_map.get(status, status)
 
     async def get_summary(self) -> GraphSummaryResponse:
         """
@@ -257,15 +261,15 @@ class GraphService:
         """
         graph = await self._get_graph()
 
-        # Get root nodes
-        root_nodes = await graph.get_root_nodes()
+        # Include completed/closed branches so the UI can show the full storyline tree.
+        root_nodes = await graph.get_root_nodes(include_inactive=True)
 
         # Build tree recursively
         async def build_tree(node: KnowledgeNode, current_depth: int) -> NodeTreeItem:
             children = []
 
             if current_depth < max_depth:
-                child_nodes = await graph.get_children(node.id)
+                child_nodes = await graph.get_children(node.id, include_inactive=True)
                 for child in child_nodes:
                     children.append(await build_tree(child, current_depth + 1))
 
@@ -273,6 +277,7 @@ class GraphService:
                 id=node.id,
                 claim=node.claim,
                 description=node.description,
+                status=self._map_status(node.status),
                 confidence=node.confidence,
                 importance=node.importance,
                 node_type=node.node_type,

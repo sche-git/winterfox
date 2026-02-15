@@ -67,6 +67,7 @@ class NodeTreeItem(BaseModel):
     id: str
     claim: str
     description: str | None = None
+    status: Literal["active", "archived", "merged"] = "active"
     confidence: float = Field(ge=0.0, le=1.0)
     importance: float = Field(ge=0.0, le=1.0)
     node_type: str | None = None

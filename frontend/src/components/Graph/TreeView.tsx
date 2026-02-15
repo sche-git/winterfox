@@ -33,6 +33,7 @@ const TreeView: React.FC = () => {
           id: r.node_id,
           claim: r.claim,
           description: null,
+          status: 'active',
           confidence: r.relevance_score,
           importance: 0.5,
           node_type: null,

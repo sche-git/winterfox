@@ -50,6 +50,7 @@ export interface NodeTreeItem {
   id: string;
   claim: string;
   description: string | null;
+  status: 'active' | 'archived' | 'merged';
   confidence: number;
   importance: number;
   node_type: 'direction' | 'question' | 'hypothesis' | 'supporting' | 'opposing' | null;
