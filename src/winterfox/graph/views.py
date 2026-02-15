@@ -62,6 +62,16 @@ def _get_status_indicator(node: "KnowledgeNode") -> str:
     return " | ".join(indicators) if indicators else ""
 
 
+def _preview_text(text: str | None, max_chars: int = 120) -> str:
+    """Return a compact single-line preview for optional long text fields."""
+    if not text:
+        return ""
+    normalized = " ".join(text.strip().split())
+    if len(normalized) <= max_chars:
+        return normalized
+    return normalized[:max_chars] + "..."
+
+
 async def render_summary_view(
     graph: "KnowledgeGraph",
     max_depth: int = 2,
@@ -138,6 +148,9 @@ async def _render_node_tree(
 
     node_line = f"{prefix}{connector}{type_indicator}[{claim_preview}] conf:{conf_str} depth:{node.depth} children:{len(node.children_ids)}{status_suffix}"
     lines.append(node_line)
+    description_preview = _preview_text(node.description, max_chars=90)
+    if description_preview:
+        lines.append(f"{prefix}{extension}desc: {description_preview}")
 
     nodes_rendered += 1
 
@@ -206,28 +219,34 @@ async def render_focused_view(
         lines.append("📍 Context Path (node → root):")
         for i, ancestor in enumerate(path):
             indent = "  " * i
-            conf_str = _format_confidence(ancestor.confidence)
             claim_preview = ancestor.claim[:80] + "..." if len(ancestor.claim) > 80 else ancestor.claim
-            lines.append(f"{indent}↑ [{claim_preview}] conf:{conf_str}")
+            lines.append(f"{indent}↑ Summary: {claim_preview}")
+            if ancestor.description:
+                lines.append(f"{indent}  Description:")
+                for desc_line in ancestor.description.splitlines():
+                    lines.append(f"{indent}    {desc_line}" if desc_line.strip() else "")
         lines.append("")
 
     # 2. Target node details
     lines.append("🎯 Target Node:")
     lines.append(f"  ID: {node.id}")
-    lines.append(f"  Claim: {node.claim}")
+    lines.append(f"  Summary: {node.claim}")
+    if node.description:
+        lines.append("  Description:")
+        for desc_line in node.description.splitlines():
+            if desc_line.strip():
+                lines.append(f"    {desc_line}")
+            else:
+                lines.append("")
     if node.node_type:
         lines.append(f"  Type: {node.node_type}")
-    lines.append(f"  Confidence: {_format_confidence(node.confidence)}")
-    lines.append(f"  Importance: {node.importance:.2f}")
-    lines.append(f"  Depth: {node.depth} cycles")
     lines.append(f"  Status: {node.status}")
-    lines.append(f"  Staleness: {node.staleness_hours:.1f} hours")
     lines.append(f"  Children: {len(node.children_ids)}")
 
     if node.evidence:
         lines.append(f"  Evidence: {len(node.evidence)} items")
-        for i, ev in enumerate(node.evidence[:3], 1):  # Show first 3
-            lines.append(f"    {i}. {ev.text[:100]}... ({ev.source})")
+        for i, ev in enumerate(node.evidence[:2], 1):
+            lines.append(f"    {i}. {ev.text[:80]}... ({ev.source})")
 
     if node.tags:
         lines.append(f"  Tags: {', '.join(node.tags)}")
@@ -237,11 +256,49 @@ async def render_focused_view(
     # 3. Subtree
     if node.children_ids:
         lines.append("📂 Subtree:")
-        await _render_node_tree(graph, node, lines, "  ", True, max_depth, 0, 100, 0)
+        await _render_focused_node_tree(graph, node, lines, "  ", True, max_depth, 0)
     else:
         lines.append("📂 No children yet (leaf node)")
 
     return "\n".join(lines)
+
+
+async def _render_focused_node_tree(
+    graph: "KnowledgeGraph",
+    node: "KnowledgeNode",
+    lines: list[str],
+    prefix: str,
+    is_last: bool,
+    max_depth: int,
+    current_depth: int,
+) -> None:
+    """Render focused subtree with full descriptions and minimal metadata."""
+    connector = "└─ " if is_last else "├─ "
+    extension = "   " if is_last else "│  "
+
+    claim_preview = node.claim[:80] + "..." if len(node.claim) > 80 else node.claim
+    lines.append(f"{prefix}{connector}[{claim_preview}]")
+
+    if node.description:
+        lines.append(f"{prefix}{extension}Description:")
+        for desc_line in node.description.splitlines():
+            lines.append(f"{prefix}{extension}  {desc_line}" if desc_line.strip() else "")
+
+    if current_depth >= max_depth:
+        return
+
+    if node.children_ids:
+        children = await graph.get_children(node.id)
+        for i, child in enumerate(children):
+            await _render_focused_node_tree(
+                graph,
+                child,
+                lines,
+                prefix + extension,
+                i == len(children) - 1,
+                max_depth,
+                current_depth + 1,
+            )
 
 
 async def _get_path_to_root(

@@ -56,10 +56,10 @@ async def read_graph_node(node_id: str) -> dict[str, Any]:
 
     return {
         "id": node.id,
+        "summary": node.claim,
         "claim": node.claim,
-        "confidence": node.confidence,
-        "importance": node.importance,
-        "depth": node.depth,
+        "description": node.description,
+        "status": node.status,
         "children_count": len(node.children_ids),
         "evidence_count": len(node.evidence),
         "tags": node.tags,
@@ -84,9 +84,10 @@ async def search_graph(query: str, limit: int = 5) -> list[dict[str, Any]]:
     return [
         {
             "id": node.id,
+            "summary": node.claim,
             "claim": node.claim,
-            "confidence": node.confidence,
-            "importance": node.importance,
+            "description": node.description,
+            "status": node.status,
         }
         for node in nodes
     ]
