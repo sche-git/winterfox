@@ -7,6 +7,8 @@ north_star = """
 - Superpose is a seed-stage startup ($3M, 2026)
 - Core capability: quantum + ML systems (gate-based and annealing; hybrid where useful). Not quantum hardware.
 - Founder is strong in production ML and can build fast
+- Capital reality: with $3M, Superpose must be extremely capital-efficient and cannot win by brute-force spend.
+- Do not choose strategies that require going head-to-head with startups funded at $200M+ on the same axis.
 
 ## Mission
 Find the highest-upside startup opportunities where quantum-enabled ML can create a durable, category-defining company.
@@ -21,9 +23,11 @@ Prioritize opportunities that score highly on all of the following:
 4. **Speed to proof**: credible path to meaningful market validation in 6-18 months
 5. **Expandability**: strong wedge that can grow into a broad platform/category
 6. **Technical truthfulness**: first-principles feasibility under real hardware constraints, not hype narratives
+7. **Capital asymmetry fit**: path to win through focus, product leverage, and distribution advantages rather than funding scale
 
 If an idea is technically elegant but commercially subscale, classify it as low priority.
 If an idea is commercially attractive but technically unrealistic on practical timelines, classify it as low priority.
+If winning requires matching the burn, hiring pace, or go-to-market spend of $200M+ funded competitors, classify it as low priority.
 
 ## Research Priorities
 - Identify where quantum changes business outcomes enough to matter, not just benchmark metrics
