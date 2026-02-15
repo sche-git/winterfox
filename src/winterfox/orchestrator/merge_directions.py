@@ -59,6 +59,8 @@ async def merge_directions_into_graph(
         "skipped": 0,
         "direction_node_refs": [],
     }
+    target_node = await graph.get_node(target_node_id)
+    target_depth = target_node.depth if target_node else 0
 
     for direction in directions:
         logger.debug(f"Processing direction: {direction.claim[:60]}...")
@@ -165,7 +167,7 @@ async def merge_directions_into_graph(
                 parent_id=target_node_id,
                 confidence=initial_confidence,
                 importance=direction.importance,
-                depth=0,  # Will be recalculated
+                depth=target_depth + 1,  # Structural graph depth (child depth = parent + 1)
                 created_by_cycle=cycle_id,
                 evidence=evidence_list,
                 tags=direction.tags or [],

@@ -220,6 +220,15 @@ You have maximum autonomy - analyze the current state and make the best strategi
 5. **Strategic Value**
    - Importance score reflects strategic relevance to mission
    - High importance, low confidence = high priority
+
+6. **Concreteness Progression (Depth-Aware)**
+   - Treat graph depth as a concreteness ladder:
+     - Depth 0: strategic thesis
+     - Depth 1: wedge + segment
+     - Depth 2: buyer/workflow + measurable pain
+     - Depth 3+: concrete targets (named companies/accounts), procurement path, integration/feasibility specifics
+   - If the graph already has many sibling branches, prefer selecting leaf/near-leaf nodes to refine concreteness
+   - Avoid repeatedly selecting high-level nodes when deeper unresolved nodes exist in that branch
 {cycle_instruction_section}
 
 ## Output Format
@@ -516,39 +525,46 @@ NOT directions (too granular):
    - Prefer deepening or revising existing strategic paths when evidence supports that
    - Propose genuinely new branches only when current evidence indicates clear unexplored opportunity
    - Do not branch for its own sake; avoid direction inflation
+   - Preserve depth-wise progression: child directions should usually be more concrete than the target direction
 
-2. **Assess Confidence**:
+2. **Concreteness Ladder (By Target Depth)**:
+   - If target depth is 0, output should trend toward wedge/segment specificity
+   - If target depth is 1, output should trend toward buyer/workflow and measurable pains
+   - If target depth is 2, output should trend toward concrete accounts/companies and deployment constraints
+   - If target depth is 3+, output should trend toward execution-ready specificity (named targets, integration path, feasibility evidence)
+   - Avoid lateral rewording at the same abstraction level unless evidence is explicitly contradictory
+3. **Assess Confidence**:
    - Interpret confidence as confidence in THIS direction claim.
    - High (0.8-1.0): Strong corroboration for the claim
    - Medium (0.5-0.7): Mixed but direction still plausible
    - Low (0.0-0.4): Weak or contradictory support for this claim
    - If stance is `disconfirm`, confidence should usually be low unless disconfirmation itself is strongly evidenced.
 
-3. **Determine Importance**:
+4. **Determine Importance**:
    - High (0.8-1.0): Critical to mission, high impact
    - Medium (0.5-0.7): Relevant, moderate impact
    - Low (0.0-0.4): Tangential, low impact
 
-4. **Identify Consensus**:
+5. **Identify Consensus**:
    - What did multiple agents agree on?
    - Where is there strong corroboration?
 
-5. **Spot Contradictions**:
+6. **Spot Contradictions**:
    - What disagreements exist?
    - Which claims conflict?
    - If most evidence is negative against a direction claim, label stance=`disconfirm` and prefer direction_outcome=`complete`
 
-6. **Respect User Steering**:
+7. **Respect User Steering**:
    - If a cycle override instruction is present, bias synthesis priorities to that instruction
    - Keep conclusions evidence-grounded and avoid overfitting to a single narrative
 {cycle_instruction_section}
 
-7. **Branching Discipline**:
+8. **Branching Discipline**:
    - You are not required to create multiple new directions every cycle
    - It is valid to return a small set of focused directions if that best reflects the evidence
    - Prioritize clarity and strategic utility over quantity
 
-8. **Next Actions Must Be Winterfox-Executable**:
+9. **Next Actions Must Be Winterfox-Executable**:
    - In each direction description, the `## Next Actions` section must include ONLY actions
      that can be executed in a future Winterfox cycle via web-based research.
    - Allowed action types:
@@ -593,6 +609,8 @@ Be strategic - extract directions that move research forward, not just facts."""
         user_prompt = f"""## Target Direction Researched
 
 **{target_node.claim}**
+
+**Target Depth**: {target_node.depth}
 
 ## Raw Research Outputs
 

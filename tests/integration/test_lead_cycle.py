@@ -97,12 +97,13 @@ async def test_graph(tmp_path):
 @pytest.mark.asyncio
 async def test_full_cycle_execution(test_graph, tmp_path):
     """Test complete cycle execution with Lead LLM architecture."""
+    initial_node = (await test_graph.get_all_active_nodes())[0]
 
     # Setup Lead LLM adapter with predetermined responses
     lead_responses = [
         # Response 1: Node selection
         json.dumps({
-            "selected_node_id": (await test_graph.get_all_active_nodes())[0].id[:8],
+            "selected_node_id": initial_node.id[:8],
             "reasoning": "This direction has low confidence and needs investigation"
         }),
         # Response 2: Direction synthesis
@@ -190,6 +191,10 @@ async def test_full_cycle_execution(test_graph, tmp_path):
     # Verify directions were created in graph
     all_nodes = await test_graph.get_all_active_nodes()
     assert len(all_nodes) > 1  # Initial node + new directions
+    assert any(
+        node.parent_id == initial_node.id and node.depth == 1
+        for node in all_nodes
+    ), "Child directions should be persisted at parent depth + 1"
 
     # Verify costs tracked
     assert result.total_cost_usd > 0
