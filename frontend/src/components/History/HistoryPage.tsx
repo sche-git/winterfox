@@ -27,14 +27,6 @@ import {
 type StoryFilter = 'all' | 'high_impact' | 'high_cost' | 'failures';
 type CyclePanel = 'insights' | 'raw' | 'context';
 
-function normalizeClaim(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
 const HistoryPage: React.FC = () => {
   const cycles = useCycleStore((s) => s.recentCycles);
   const setCurrentPage = useUIStore((s) => s.setCurrentPage);
@@ -45,7 +37,6 @@ const HistoryPage: React.FC = () => {
   const [details, setDetails] = useState<Record<number, CycleDetail>>({});
   const [loading, setLoading] = useState<Record<number, boolean>>({});
   const [panelByCycle, setPanelByCycle] = useState<Record<number, CyclePanel>>({});
-  const [directionNodeMapByCycle, setDirectionNodeMapByCycle] = useState<Record<number, Record<string, string>>>({});
 
   const avgCost = useMemo(() => {
     if (cycles.length === 0) return 0;
@@ -74,13 +65,6 @@ const HistoryPage: React.FC = () => {
       try {
         const detail = await api.getCycle(cycle.id);
         setDetails((prev) => ({ ...prev, [cycle.id]: detail }));
-
-        const directionMap: Record<string, string> = {};
-        detail.direction_node_refs.forEach((ref) => {
-          if (!ref.node_id) return;
-          directionMap[normalizeClaim(ref.claim)] = ref.node_id;
-        });
-        setDirectionNodeMapByCycle((prev) => ({ ...prev, [cycle.id]: directionMap }));
       } finally {
         setLoading((prev) => ({ ...prev, [cycle.id]: false }));
       }
@@ -154,15 +138,10 @@ const HistoryPage: React.FC = () => {
             const isLoading = !!loading[cycle.id];
             const directionCreated = detail?.directions_created ?? 0;
             const directionUpdated = detail?.directions_updated ?? 0;
-            const consensus = detail?.consensus_directions ?? [];
-            const directionsCreated = Array.from(
-              new Set(
-                consensus
-                  .map((item) => item.trim())
-                  .filter((item) => item.length > 0)
-              )
+            const directionRefs = Array.from(
+              new Map((detail?.direction_node_refs ?? []).filter((ref) => ref.node_id).map((ref) => [ref.node_id, ref]))
+                .values()
             );
-            const directionNodeMap = directionNodeMapByCycle[cycle.id] ?? {};
             const panel = panelByCycle[cycle.id] ?? 'insights';
             const contextContent = detail?.research_context?.trim() ?? '';
 
@@ -252,7 +231,7 @@ const HistoryPage: React.FC = () => {
                           {panel === 'insights' ? (
                             <div
                               className={
-                                directionsCreated.length > 0
+                                directionRefs.length > 0
                                   ? 'grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_320px]'
                                   : 'space-y-4'
                               }
@@ -290,30 +269,22 @@ const HistoryPage: React.FC = () => {
                                 </div>
                               </div>
 
-                              {directionsCreated.length > 0 && (
+                              {directionRefs.length > 0 && (
                                 <div className="rounded-md border p-3 md:h-fit">
                                   <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                                     Directions Created
                                   </p>
                                   <ul className="space-y-1">
-                                    {directionsCreated.map((direction, i) => (
+                                    {directionRefs.map((direction, i) => (
                                       <li key={`${cycle.id}-${i}`}>
-                                        {(() => {
-                                          const nodeId = directionNodeMap[normalizeClaim(direction)] ?? null;
-                                          return (
                                         <button
-                                          onClick={() => nodeId && openDirectionOnMap(nodeId)}
-                                          disabled={!nodeId}
-                                          className={`flex w-full items-center gap-1 rounded-md border bg-background px-2 py-1.5 text-left text-sm transition-colors ${
-                                            nodeId ? 'hover:bg-muted' : 'cursor-not-allowed opacity-60'
-                                          }`}
-                                          title={nodeId ? 'Open in Research Map' : 'No node ID mapped for this direction'}
+                                          onClick={() => openDirectionOnMap(direction.node_id)}
+                                          className="flex w-full items-center gap-1 rounded-md border bg-background px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted"
+                                          title="Open in Research Map"
                                         >
-                                          <span className="line-clamp-2 flex-1">{direction}</span>
+                                          <span className="line-clamp-2 flex-1">{direction.claim}</span>
                                           <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                                         </button>
-                                          );
-                                        })()}
                                       </li>
                                     ))}
                                   </ul>
