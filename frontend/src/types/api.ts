@@ -14,6 +14,7 @@ export interface Evidence {
 export interface Node {
   id: string;
   claim: string;
+  description: string | null;
   confidence: number;
   importance: number;
   depth: number;
@@ -48,6 +49,7 @@ export interface NodesListResponse {
 export interface NodeTreeItem {
   id: string;
   claim: string;
+  description: string | null;
   confidence: number;
   importance: number;
   node_type: 'direction' | 'question' | 'hypothesis' | 'supporting' | 'opposing' | null;

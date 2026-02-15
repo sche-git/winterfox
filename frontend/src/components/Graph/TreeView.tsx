@@ -32,6 +32,7 @@ const TreeView: React.FC = () => {
         const results: NodeTreeItem[] = response.results.map((r) => ({
           id: r.node_id,
           claim: r.claim,
+          description: null,
           confidence: r.relevance_score,
           importance: 0.5,
           node_type: null,

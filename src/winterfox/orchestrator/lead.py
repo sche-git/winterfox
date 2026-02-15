@@ -54,6 +54,7 @@ class Direction:
     importance: float  # 0.0 to 1.0
     reasoning: str  # Why this direction matters
     evidence_summary: str  # Brief summary of supporting evidence
+    description: str  # Detailed one-page narrative for users/UI
     tags: list[str] | None = None
 
 
@@ -497,6 +498,9 @@ NOT directions (too granular):
    - Look for strategic questions, approaches, or hypotheses
    - Group related findings into coherent directions
    - Each direction should suggest a path of inquiry
+   - For each direction, provide:
+     - `claim`: concise one-line summary
+     - `description`: long-form narrative (at least 220 words; target 350-700 words)
    - Preserve both breadth-oriented and depth-oriented next steps when warranted by evidence
 
 2. **Assess Confidence**:
@@ -528,7 +532,8 @@ Respond with ONLY this JSON structure:
 {{
   "directions": [
     {{
-      "claim": "Direction statement (strategic path to explore)",
+      "claim": "Short summary (one line, <=120 chars)",
+      "description": "Detailed one-page narrative (target 350-700 words) covering context, scope, assumptions, evidence, and next actions",
       "confidence": 0.85,
       "importance": 0.9,
       "reasoning": "Why this direction matters and what it builds on",
@@ -580,6 +585,23 @@ Respond with ONLY the JSON structure (no markdown, no extra text).
                 directions=[
                     Direction(
                         claim=f"Continue investigating: {target_node.claim}",
+                        description=(
+                            "This fallback direction is intentionally comprehensive because synthesis output "
+                            "could not be parsed. The next cycle should restate the target direction and "
+                            "establish the precise decision objective it informs, then enumerate the key "
+                            "unknowns that currently block confident judgment. Research should map the "
+                            "assumptions behind the current direction, identify which assumptions are most "
+                            "fragile, and prioritize evidence collection that can falsify or confirm those "
+                            "assumptions quickly. Include both supporting and contradicting signals from "
+                            "independent sources, with explicit source quality assessment and recency checks. "
+                            "Quantify where possible: market sizes, rates of change, comparative benchmarks, "
+                            "and confidence intervals or uncertainty bounds when data quality is limited. "
+                            "If contradictory claims appear, isolate the disagreement drivers such as scope "
+                            "differences, stale data, or methodological inconsistencies, and propose targeted "
+                            "queries to resolve each contradiction. The output should also define practical next "
+                            "steps: what to test in the next cycle, what can be deprioritized, and which "
+                            "conditions would justify re-scoring confidence or importance for this direction."
+                        ),
                         confidence=0.5,
                         importance=0.7,
                         reasoning="Fallback direction (synthesis parse failed)",
@@ -597,8 +619,12 @@ Respond with ONLY the JSON structure (no markdown, no extra text).
             # Parse directions
             directions = []
             for dir_data in synthesis_data.get("directions", []):
+                description = str(dir_data["description"]).strip()
+                if not description:
+                    raise ValueError("Direction description must be non-empty")
                 directions.append(Direction(
                     claim=dir_data["claim"],
+                    description=description,
                     confidence=float(dir_data["confidence"]),
                     importance=float(dir_data["importance"]),
                     reasoning=dir_data["reasoning"],
@@ -630,6 +656,22 @@ Respond with ONLY the JSON structure (no markdown, no extra text).
                 directions=[
                     Direction(
                         claim=f"Continue investigating: {target_node.claim}",
+                        description=(
+                            "This fallback direction is intentionally comprehensive because synthesis output "
+                            "failed schema validation. The next cycle should restate the target direction and "
+                            "define the operational question to be answered, including how the answer will alter "
+                            "decisions in the project roadmap. Build a structured evidence plan with independent "
+                            "sources across primary data, reputable secondary analysis, and recent market signals. "
+                            "Explicitly track assumptions, then test the highest-impact assumptions first using "
+                            "queries designed to disconfirm weak narratives rather than reinforce prior beliefs. "
+                            "Require quantitative support where possible, including ranges and source dates, and "
+                            "separate descriptive facts from strategic implications so downstream synthesis can "
+                            "evaluate confidence correctly. When evidence conflicts, categorize each conflict by "
+                            "scope, geography, cohort, or timeframe, and specify follow-up checks needed to close "
+                            "those gaps. The cycle output should finish with concrete next actions: what branch "
+                            "to deepen, what branch to challenge, and what threshold of corroboration is required "
+                            "before upgrading confidence or importance for this direction."
+                        ),
                         confidence=0.5,
                         importance=0.7,
                         reasoning=f"Fallback direction (synthesis parse error: {e})",

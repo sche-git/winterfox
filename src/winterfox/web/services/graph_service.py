@@ -85,6 +85,7 @@ class GraphService:
         return NodeResponse(
             id=node.id,
             claim=node.claim,
+            description=node.description,
             confidence=node.confidence,
             importance=node.importance,
             depth=node.depth,
@@ -270,6 +271,7 @@ class GraphService:
             return NodeTreeItem(
                 id=node.id,
                 claim=node.claim,
+                description=node.description,
                 confidence=node.confidence,
                 importance=node.importance,
                 node_type=node.node_type,

@@ -409,6 +409,7 @@ async def test_synthesize_directions_success():
         "directions": [
             {
                 "claim": "Investigate B2B vs B2C market fit",
+                "description": "Compare buyer urgency, sales cycles, and pricing tolerance across SMB and enterprise segments.",
                 "confidence": 0.85,
                 "importance": 0.9,
                 "reasoning": "Both agents confirmed market size, need to understand segments",
@@ -417,6 +418,7 @@ async def test_synthesize_directions_success():
             },
             {
                 "claim": "Analyze competitive landscape of key players",
+                "description": "Map competitor archetypes, distribution channels, pricing dynamics, and defensibility signals to determine where durable differentiation exists and which strategic moves are likely to be crowded.",
                 "confidence": 0.75,
                 "importance": 0.8,
                 "reasoning": "Multiple companies identified, need deeper analysis",
@@ -443,6 +445,7 @@ async def test_synthesize_directions_success():
     assert synthesis.directions[0].confidence == 0.85
     assert synthesis.directions[0].importance == 0.9
     assert len(synthesis.directions[0].tags) == 2
+    assert "buyer urgency" in synthesis.directions[0].description
 
     assert synthesis.directions[1].claim == "Analyze competitive landscape of key players"
     assert len(synthesis.consensus_directions) == 1
@@ -579,6 +582,7 @@ async def test_synthesize_directions_with_contradictions():
         "directions": [
             {
                 "claim": "Verify actual market size estimate",
+                "description": "Reconcile conflicting market-size estimates by normalizing scope, time horizon, and methodology, then identify the minimum additional evidence needed to converge on a defensible estimate range.",
                 "confidence": 0.4,
                 "importance": 0.9,
                 "reasoning": "Conflicting estimates need resolution",
@@ -657,6 +661,7 @@ async def test_synthesize_multiple_agents():
         "directions": [
             {
                 "claim": "Direction synthesized from all 3 agents",
+                "description": "Integrate corroborated findings from all participating agents into a unified strategic direction, explicitly documenting consensus points, residual uncertainty, and concrete follow-up work required for stronger confidence.",
                 "confidence": 0.9,
                 "importance": 0.85,
                 "reasoning": "Strong consensus across all agents",

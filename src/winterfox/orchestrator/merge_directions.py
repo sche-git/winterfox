@@ -102,6 +102,12 @@ async def merge_directions_into_graph(
             if len(direction.claim) > len(existing.claim):
                 existing.claim = direction.claim
 
+            # Keep the richer description so users can read full context in UI.
+            if direction.description and (
+                not existing.description or len(direction.description) > len(existing.description)
+            ):
+                existing.description = direction.description
+
             # Update importance (Lead LLM may have re-evaluated)
             # Take weighted average: 70% existing, 30% new
             existing.importance = existing.importance * 0.7 + direction.importance * 0.3
@@ -138,6 +144,7 @@ async def merge_directions_into_graph(
             # Create direction node
             new_node = await graph.add_node(
                 claim=direction.claim,
+                description=direction.description or None,
                 parent_id=target_node_id,
                 confidence=initial_confidence,
                 importance=direction.importance,

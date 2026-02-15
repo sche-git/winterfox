@@ -110,7 +110,8 @@ const ResearchMapCanvas: React.FC = () => {
       .map(({ node, depth, order }) => {
         const count = depthCounts[depth] ?? 1;
         const y = (order - (count - 1) / 2) * ROW_GAP;
-        const matchesSearch = queryLower.length === 0 || node.claim.toLowerCase().includes(queryLower);
+        const haystack = `${node.claim} ${node.description ?? ''}`.toLowerCase();
+        const matchesSearch = queryLower.length === 0 || haystack.includes(queryLower);
         const focused = selectedNodeId ? upstreamSet.has(node.id) : true;
         const dimmed = !matchesSearch || (focusMode && selectedNodeId ? !focused : false);
 

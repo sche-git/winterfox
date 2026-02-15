@@ -123,6 +123,7 @@ const NodeDetail: React.FC = () => {
 
   const parsed = parseClaimType(selectedNode.claim, selectedNode.node_type);
   const typeConfig = getNodeTypeConfig(parsed.nodeType);
+  const description = selectedNode.description?.trim() || '';
 
   return (
     <div className="h-full overflow-auto">
@@ -137,7 +138,23 @@ const NodeDetail: React.FC = () => {
           </button>
         )}
 
-        <p className="text-base leading-relaxed">{parsed.claim}</p>
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Summary
+          </p>
+          <p className="mt-1 text-base leading-relaxed">{parsed.claim}</p>
+        </div>
+
+        {description && (
+          <div className="mt-4 rounded-md border bg-muted/20 p-3">
+            <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Description
+            </p>
+            <div className="text-sm leading-relaxed">
+              <MarkdownContent content={description} />
+            </div>
+          </div>
+        )}
 
         <div className="mt-3 flex items-center gap-2">
           <Button
@@ -150,7 +167,7 @@ const NodeDetail: React.FC = () => {
             }}
           >
             {copied ? <Check className="mr-1.5 h-3.5 w-3.5" /> : <Copy className="mr-1.5 h-3.5 w-3.5" />}
-            {copied ? 'Copied' : 'Copy Claim'}
+            {copied ? 'Copied' : 'Copy Summary'}
           </Button>
           {selectedNode.created_by_cycle > 0 && (
             <Button

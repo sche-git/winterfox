@@ -41,6 +41,10 @@ class KnowledgeNode(BaseModel):
 
     # Content
     claim: str = Field(..., min_length=1, description="The direction/claim text")
+    description: str | None = Field(
+        default=None,
+        description="Longer description of the direction for human-readable context",
+    )
 
     # Metrics
     confidence: float = Field(
@@ -121,6 +125,7 @@ class KnowledgeNode(BaseModel):
                 "workspace_id": "default",
                 "parent_id": "parent123",
                 "claim": "Explore B2B vs B2C market fit for legal tech startups in 2024",
+                "description": "Compare ICPs, sales motion, pricing expectations, and adoption barriers for each segment.",
                 "confidence": 0.75,
                 "importance": 0.9,
                 "depth": 3,

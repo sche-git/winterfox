@@ -25,6 +25,7 @@ class NodeResponse(BaseModel):
 
     id: str
     claim: str
+    description: str | None = None
     confidence: float = Field(ge=0.0, le=1.0)
     importance: float = Field(ge=0.0, le=1.0)
     depth: int = Field(ge=0)
@@ -65,6 +66,7 @@ class NodeTreeItem(BaseModel):
 
     id: str
     claim: str
+    description: str | None = None
     confidence: float = Field(ge=0.0, le=1.0)
     importance: float = Field(ge=0.0, le=1.0)
     node_type: str | None = None
