@@ -225,21 +225,24 @@ const OverviewPage: React.FC = () => {
             <CardTitle className="text-base font-semibold">Cost Breakdown</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="mb-4 grid grid-cols-2 gap-4">
-              <div>
-                <div className="text-xs text-muted-foreground">Lead LLM</div>
-                <div className="mt-1 text-lg font-semibold tabular-nums">${stats.cost.lead_llm_usd.toFixed(3)}</div>
+            <div className="mb-4 space-y-2">
+              <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+                <span className="text-xs text-muted-foreground">Lead LLM</span>
+                <span className="text-sm font-semibold tabular-nums">${stats.cost.lead_llm_usd.toFixed(3)}</span>
               </div>
-              <div>
-                <div className="text-xs text-muted-foreground">Research Agents</div>
-                <div className="mt-1 text-lg font-semibold tabular-nums">${stats.cost.research_agents_usd.toFixed(3)}</div>
+              <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+                <span className="text-xs text-muted-foreground">Research Agents</span>
+                <span className="text-sm font-semibold tabular-nums">${stats.cost.research_agents_usd.toFixed(3)}</span>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-              {Object.entries(stats.cost.by_agent).map(([agent, cost]) => (
-                <div key={agent}>
-                  <div className="text-xs text-muted-foreground truncate">{agent}</div>
-                  <div className="mt-1 text-lg font-semibold tabular-nums">${cost.toFixed(3)}</div>
+            <div className="h-px bg-border my-3" />
+            <div className="space-y-2">
+              {Object.entries(stats.cost.by_agent)
+                .sort((a, b) => b[1] - a[1])
+                .map(([agent, cost]) => (
+                <div key={agent} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+                  <span className="truncate pr-3 text-xs text-muted-foreground">{agent}</span>
+                  <span className="text-sm font-semibold tabular-nums">${cost.toFixed(3)}</span>
                 </div>
               ))}
             </div>

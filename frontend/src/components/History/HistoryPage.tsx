@@ -159,7 +159,10 @@ const HistoryPage: React.FC = () => {
                         </button>
                         <Badge variant="outline" className="text-[10px] py-0">{formatTimestamp(cycle.started_at)}</Badge>
                       </div>
-                      <p className="mt-2 text-sm leading-relaxed">{cycle.target_claim || 'No target claim recorded'}</p>
+                      <MarkdownContent
+                        content={cycle.target_claim || 'No target claim recorded'}
+                        className="mt-2"
+                      />
                     </div>
                     <button
                       onClick={() => toggleExpand(cycle)}

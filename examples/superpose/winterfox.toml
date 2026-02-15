@@ -7,11 +7,13 @@ north_star = """
 - Superpose is a seed-stage startup ($3M, 2026)
 - Core capability: quantum + ML systems (gate-based and annealing; hybrid where useful). Not quantum hardware.
 - Founder is strong in production ML and can build fast
+- Founder also has deep background in training foundation models and building ML systems.
 - Capital reality: with $3M, Superpose must be extremely capital-efficient and cannot win by brute-force spend.
 - Do not choose strategies that require going head-to-head with startups funded at $200M+ on the same axis.
 
 ## Mission
-Find the highest-upside startup opportunities where quantum-enabled ML can create a durable, category-defining company.
+Find the highest-upside startup opportunities that can create a durable, category-defining company on a unicorn trajectory.
+Evaluate multiple strategic paths, with quantum-enabled ML as one path and foundation model + agentic software as another.
 
 This is not academic exploration for its own sake. Technical work is only useful if it supports a large, defensible business outcome.
 
@@ -32,6 +34,8 @@ If winning requires matching the burn, hiring pace, or go-to-market spend of $20
 ## Research Priorities
 - Identify where quantum changes business outcomes enough to matter, not just benchmark metrics
 - Compare both paradigms (annealing and gate-based) and hybrid designs based on practical impact
+- Identify high-upside opportunities in foundation models and agentic software where founder advantage is strong
+- Prioritize agentic-software opportunities with strong demand signals (for example, OpenClaw-like momentum) and clear willingness to pay
 - Find concrete buyers, budgets, adoption blockers, and switching friction
 - Map competitor landscape and where a new entrant can still win
 - Estimate upside and downside with explicit assumptions

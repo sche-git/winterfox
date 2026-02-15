@@ -444,7 +444,7 @@ Begin your research. Remember: your raw output will be analyzed by the Lead LLM 
         Lead LLM extracts strategic directions from raw research outputs.
 
         Replaces note_finding tool - LLM decides what matters.
-        Synthesizes multiple raw outputs into 3-7+ directions (no fixed limit).
+        Synthesizes multiple raw outputs into strategic next-step directions.
 
         Args:
             agent_outputs: Raw outputs from research agents
@@ -494,7 +494,7 @@ NOT directions (too granular):
 
 ## Synthesis Guidelines
 
-1. **Extract Directions** (3-7+, no hard limit):
+1. **Extract Directions**:
    - Look for strategic questions, approaches, or hypotheses
    - Group related findings into coherent directions
    - Each direction should suggest a path of inquiry
@@ -504,7 +504,9 @@ NOT directions (too granular):
        - Use Markdown structure with short sections and bullets where helpful
        - Preserve meaningful line breaks between sections/points
        - Include concrete items: context, key evidence, assumptions/risks, and next actions
-   - Preserve both breadth-oriented and depth-oriented next steps when warranted by evidence
+   - Prefer deepening or revising existing strategic paths when evidence supports that
+   - Propose genuinely new branches only when current evidence indicates clear unexplored opportunity
+   - Do not branch for its own sake; avoid direction inflation
 
 2. **Assess Confidence**:
    - High (0.8-1.0): Multiple agents agree, strong evidence
@@ -528,6 +530,11 @@ NOT directions (too granular):
    - If a cycle override instruction is present, bias synthesis priorities to that instruction
    - Keep conclusions evidence-grounded and avoid overfitting to a single narrative
 {cycle_instruction_section}
+
+7. **Branching Discipline**:
+   - You are not required to create multiple new directions every cycle
+   - It is valid to return a small set of focused directions if that best reflects the evidence
+   - Prioritize clarity and strategic utility over quantity
 
 ## Output Format
 
@@ -733,17 +740,22 @@ Rules:
 - Keep scores in [0.0, 1.0].
 - Confidence reflects how strongly the direction is now validated.
 - Importance reflects strategic relevance to the mission now.
+- Choose exactly ONE strategic action for this target:
+  - diverge: keep this direction active and branch into additional related directions
+  - deepen: keep this direction active and continue focused investigation on this same path
+  - close: this path is a dead end or sufficiently concluded for now; mark as completed
 - Decide lifecycle status:
-  - active: continue investing
-  - completed: sufficiently answered for now
+  - active: continue investing (for `diverge` or `deepen`)
+  - completed: sufficiently answered / dead end for now (for `close`)
   - closed: not viable / low strategic value now
 
 Return ONLY JSON:
 {{
+  "action": "diverge|deepen|close",
   "confidence": 0.0,
   "importance": 0.0,
   "status": "active|completed|closed",
-  "reasoning": "2-4 sentences explaining why these updated scores are justified by this cycle."
+  "reasoning": "2-4 sentences justifying the chosen action and updated scores."
 }}"""
 
         agent_evidence_summary = "\n\n".join(agent_summaries)
@@ -766,7 +778,8 @@ Return ONLY JSON:
 ## Agent Evidence Summary
 {agent_evidence_summary}
 
-Reassess the target direction and return ONLY the JSON schema."""
+Reassess the target direction and return ONLY the JSON schema.
+You must choose one action: diverge, deepen, or close."""
 
         output = await self.adapter.run(
             system_prompt=system_prompt,
@@ -793,6 +806,7 @@ Reassess the target direction and return ONLY the JSON schema."""
 
         try:
             data = json.loads(json_match.group())
+            action = str(data.get("action", "")).strip().lower()
             confidence = float(data["confidence"])
             importance = float(data["importance"])
             status = str(data.get("status", target_node.status)).strip().lower()
@@ -801,6 +815,9 @@ Reassess the target direction and return ONLY the JSON schema."""
             # Hard bounds for data integrity only (not heuristic scoring logic).
             confidence = max(0.0, min(1.0, confidence))
             importance = max(0.0, min(1.0, importance))
+            if action == "close":
+                # Explicit policy: dead-end/closed action maps to completed lifecycle state.
+                status = "completed"
             if status not in {"active", "completed", "closed"}:
                 status = target_node.status
 
