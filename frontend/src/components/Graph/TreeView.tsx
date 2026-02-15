@@ -66,7 +66,7 @@ const TreeView: React.FC = () => {
       <div className="border-b p-3 space-y-2 shrink-0">
         <div className="flex items-center justify-between">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Knowledge Graph
+            Research Map
           </span>
           <span className="text-xs tabular-nums text-muted-foreground">
             {countNodes(tree)} nodes

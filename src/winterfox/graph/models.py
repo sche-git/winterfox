@@ -63,7 +63,7 @@ class KnowledgeNode(BaseModel):
     )
 
     # Status and relationships
-    status: Literal["active", "killed", "merged", "speculative"] = Field(
+    status: Literal["active", "completed", "closed", "killed", "merged", "speculative"] = Field(
         default="active", description="Current status of the node"
     )
     children_ids: list[str] = Field(

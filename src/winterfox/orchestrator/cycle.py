@@ -31,6 +31,28 @@ logger = logging.getLogger(__name__)
 EventCallback = Callable[[dict[str, Any]], Coroutine[Any, Any, None]]
 
 
+def _combine_selection_and_reassessment_reasoning(
+    selection_reasoning: str | None,
+    reassessment_reasoning: str | None,
+) -> str | None:
+    """Store both lead selection and post-cycle reassessment in one DB field."""
+    selection_text = (selection_reasoning or "").strip()
+    reassessment_text = (reassessment_reasoning or "").strip()
+
+    if selection_text and reassessment_text:
+        return (
+            f"{selection_text}\n\n"
+            "---\n"
+            "Post-cycle reassessment:\n"
+            f"{reassessment_text}"
+        )
+    if selection_text:
+        return selection_text
+    if reassessment_text:
+        return f"Post-cycle reassessment:\n{reassessment_text}"
+    return None
+
+
 @dataclass
 class CycleResult:
     """Result of a single research cycle with Lead LLM architecture."""
@@ -49,6 +71,7 @@ class CycleResult:
     agent_outputs: list["AgentOutput"]
     synthesis_reasoning: str | None
     selection_reasoning: str | None
+    reassessment_reasoning: str | None
     research_context: str | None
     success: bool
     error_message: str | None = None
@@ -118,6 +141,7 @@ class ResearchCycle:
         self,
         target_node_id: str | None = None,
         max_searches: int = 25,
+        cycle_instruction: str | None = None,
     ) -> CycleResult:
         """
         Execute a single research cycle with Lead LLM architecture.
@@ -125,6 +149,7 @@ class ResearchCycle:
         Args:
             target_node_id: Specific node to research (or None for Lead LLM selection)
             max_searches: Maximum web searches per agent
+            cycle_instruction: Optional one-off instruction for this cycle
 
         Returns:
             CycleResult with directions and cost tracking
@@ -152,9 +177,13 @@ class ResearchCycle:
                 if not target:
                     raise ValueError(f"Target node {target_node_id} not found")
                 selection_reasoning = "User-specified target"
+                if cycle_instruction:
+                    selection_reasoning += f" + cycle override: {cycle_instruction}"
             else:
                 # Lead LLM selects direction autonomously
-                target, selection_reasoning = await self.lead_llm.select_direction()
+                target, selection_reasoning = await self.lead_llm.select_direction(
+                    cycle_instruction=cycle_instruction,
+                )
 
             logger.info(
                 f"[Cycle {self.cycle_id}] Target: {target.claim[:60]}... "
@@ -170,6 +199,7 @@ class ResearchCycle:
                     "focus_node_id": target.id,
                     "focus_claim": target.claim,
                     "selection_reasoning": selection_reasoning,
+                    "cycle_instruction": cycle_instruction,
                 }
             })
 
@@ -211,6 +241,7 @@ class ResearchCycle:
                 research_agents=self.research_agents,
                 tools=self.tools,
                 max_searches=max_searches,
+                cycle_instruction=cycle_instruction,
             )
             agent_outputs = dispatch_result.outputs
 
@@ -243,6 +274,7 @@ class ResearchCycle:
             synthesis: DirectionSynthesis = await self.lead_llm.synthesize_directions(
                 agent_outputs=agent_outputs,
                 target_node=target,
+                cycle_instruction=cycle_instruction,
             )
 
             logger.info(
@@ -295,6 +327,37 @@ class ResearchCycle:
                 logger.info(f"[Cycle {self.cycle_id}] Deduplicated {merged_count} directions")
 
             # ═══════════════════════════════════════════════════════════
+            # STEP 7: Lead LLM reassesses target direction (95% progress)
+            # ═══════════════════════════════════════════════════════════
+            await self._emit_event({
+                "type": "cycle.step",
+                "data": {
+                    "cycle_id": self.cycle_id,
+                    "step": "target_reassessment",
+                    "progress_percent": 95,
+                }
+            })
+
+            current_target = await self.graph.get_node(target.id) or target
+            reassessment = await self.lead_llm.reassess_target_direction(
+                target_node=current_target,
+                agent_outputs=agent_outputs,
+                synthesis=synthesis,
+            )
+            current_target.confidence = reassessment.confidence
+            current_target.importance = reassessment.importance
+            current_target.status = reassessment.status
+            current_target.updated_by_cycle = self.cycle_id
+            await self.graph.update_node(current_target)
+            target = current_target
+            lead_llm_cost += reassessment.cost_usd
+
+            logger.info(
+                f"[Cycle {self.cycle_id}] Reassessed target "
+                f"(conf={target.confidence:.2f}, imp={target.importance:.2f}, status={target.status})"
+            )
+
+            # ═══════════════════════════════════════════════════════════
             # Calculate final stats
             # ═══════════════════════════════════════════════════════════
             duration = time.time() - start_time
@@ -309,6 +372,12 @@ class ResearchCycle:
                 "## Research User Prompt\n\n"
                 f"{dispatch_result.user_prompt}"
             )
+            if cycle_instruction:
+                context_snapshot = (
+                    "## Cycle Override Instruction\n\n"
+                    f"{cycle_instruction}\n\n"
+                    f"{context_snapshot}"
+                )
             result = CycleResult(
                 cycle_id=self.cycle_id,
                 target_node_id=target.id,
@@ -324,6 +393,7 @@ class ResearchCycle:
                 agent_outputs=agent_outputs,
                 synthesis_reasoning=synthesis.synthesis_reasoning,
                 selection_reasoning=selection_reasoning,
+                reassessment_reasoning=reassessment.reasoning,
                 research_context=context_snapshot,
                 success=True,
             )
@@ -388,6 +458,7 @@ class ResearchCycle:
                 agent_outputs=[],
                 synthesis_reasoning=None,
                 selection_reasoning=None,
+                reassessment_reasoning=None,
                 research_context=None,
                 success=False,
                 error_message=str(e),
@@ -456,7 +527,10 @@ class ResearchCycle:
                 success=result.success,
                 error_message=result.error_message,
                 selection_strategy=None,  # Lead LLM makes strategic decisions
-                selection_reasoning=result.selection_reasoning,
+                selection_reasoning=_combine_selection_and_reassessment_reasoning(
+                    result.selection_reasoning,
+                    result.reassessment_reasoning,
+                ),
                 research_context=result.research_context,
             )
 

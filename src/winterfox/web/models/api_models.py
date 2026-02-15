@@ -208,7 +208,7 @@ class RunCycleRequest(BaseModel):
     """Request to run a new cycle."""
 
     target_node_id: str | None = None
-    use_consensus: bool = True
+    cycle_instruction: str | None = None
 
 
 class RunCycleResponse(BaseModel):
@@ -320,6 +320,13 @@ class SearchProviderResponse(BaseModel):
     enabled: bool = True
 
 
+class ContextDocumentResponse(BaseModel):
+    """Context document exposed to frontend."""
+
+    filename: str
+    content: str
+
+
 class ConfigResponse(BaseModel):
     """Project configuration."""
 
@@ -329,6 +336,8 @@ class ConfigResponse(BaseModel):
     lead_agent: LeadAgentConfigResponse
     agents: list[AgentConfigResponse]
     search_providers: list[SearchProviderResponse]
+    search_instructions: str | None = None
+    context_documents: list[ContextDocumentResponse] = Field(default_factory=list)
 
 
 # Report API models

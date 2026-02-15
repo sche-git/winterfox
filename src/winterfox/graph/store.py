@@ -155,6 +155,22 @@ SCHEMA_STATEMENTS = [
 
     "CREATE INDEX IF NOT EXISTS idx_usage_workspace ON usage_events(workspace_id, timestamp)",
 
+    # Project context documents (persisted from config files for UI/API access)
+    """
+    CREATE TABLE IF NOT EXISTS project_context_documents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workspace_id TEXT NOT NULL DEFAULT 'default',
+        filename TEXT NOT NULL,
+        content TEXT NOT NULL,
+        source_path TEXT,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+        UNIQUE(workspace_id, filename)
+    )
+    """,
+
+    "CREATE INDEX IF NOT EXISTS idx_project_context_workspace ON project_context_documents(workspace_id, filename)",
+
     # Cycle outputs table (for storing raw agent outputs and synthesis)
     """
 CREATE TABLE IF NOT EXISTS cycle_outputs (
@@ -405,6 +421,76 @@ class KnowledgeGraph:
             # Only close if not keeping persistent connection
             if not self._is_memory:
                 await db.close()
+
+    async def upsert_context_documents(
+        self,
+        documents: list[dict[str, str]],
+        clear_existing: bool = True,
+    ) -> None:
+        """
+        Persist project context documents for this workspace.
+
+        Args:
+            documents: List with at least filename/content keys
+            clear_existing: If True, replace existing workspace documents
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        async with self._get_db() as db:
+            if clear_existing:
+                await db.execute(
+                    "DELETE FROM project_context_documents WHERE workspace_id = ?",
+                    (self.workspace_id,),
+                )
+
+            for doc in documents:
+                filename = doc.get("filename", "").strip()
+                content = doc.get("content", "")
+                source_path = doc.get("source_path", "")
+                if not filename or not content:
+                    continue
+
+                await db.execute(
+                    """
+                    INSERT INTO project_context_documents (
+                        workspace_id, filename, content, source_path, updated_at
+                    ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(workspace_id, filename) DO UPDATE SET
+                        content = excluded.content,
+                        source_path = excluded.source_path,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (self.workspace_id, filename, content, source_path),
+                )
+
+            await db.commit()
+
+    async def get_context_documents(self) -> list[dict[str, str]]:
+        """Return persisted context documents for this workspace."""
+        if not self._initialized:
+            await self.initialize()
+
+        async with self._get_db() as db:
+            cursor = await db.execute(
+                """
+                SELECT filename, content, source_path
+                FROM project_context_documents
+                WHERE workspace_id = ?
+                ORDER BY filename
+                """,
+                (self.workspace_id,),
+            )
+            rows = await cursor.fetchall()
+
+        return [
+            {
+                "filename": row[0],
+                "content": row[1],
+                "source_path": row[2] or "",
+            }
+            for row in rows
+        ]
 
     async def _get_connection(self) -> aiosqlite.Connection:
         """Get a database connection (persistent for :memory:, new for file)."""
@@ -1406,6 +1492,112 @@ class KnowledgeGraph:
         if deleted_anything:
             logger.info(f"Deleted cycle {cycle_id} from workspace {workspace_id}")
         return deleted_anything
+
+    async def get_child_cycle_ids(
+        self,
+        workspace_id: str,
+        cycle_id: int,
+    ) -> list[int]:
+        """
+        Get direct child cycle IDs for a cycle.
+
+        A child cycle is one whose target node was created by ``cycle_id``.
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        async with self._get_db() as db:
+            cursor = await db.execute(
+                """
+                SELECT DISTINCT co.cycle_id
+                FROM cycle_outputs co
+                JOIN nodes n ON co.target_node_id = n.id
+                WHERE co.workspace_id = ?
+                  AND n.workspace_id = ?
+                  AND n.created_by_cycle = ?
+                  AND co.cycle_id != ?
+                ORDER BY co.cycle_id DESC
+                """,
+                (workspace_id, workspace_id, cycle_id, cycle_id),
+            )
+            rows = await cursor.fetchall()
+
+        return [int(row[0]) for row in rows]
+
+    async def delete_cycle_recursive(
+        self,
+        workspace_id: str,
+        cycle_id: int,
+        visited: set[int] | None = None,
+    ) -> list[int]:
+        """
+        Delete a cycle and all descendant cycles (child-first).
+
+        Returns the list of deleted cycle IDs in delete order.
+        """
+        if visited is None:
+            visited = set()
+
+        if cycle_id in visited:
+            return []
+        visited.add(cycle_id)
+
+        deleted_cycle_ids: list[int] = []
+        child_cycle_ids = await self.get_child_cycle_ids(workspace_id, cycle_id)
+
+        for child_cycle_id in child_cycle_ids:
+            deleted_cycle_ids.extend(
+                await self.delete_cycle_recursive(
+                    workspace_id=workspace_id,
+                    cycle_id=child_cycle_id,
+                    visited=visited,
+                )
+            )
+
+        deleted = await self.delete_cycle(workspace_id=workspace_id, cycle_id=cycle_id)
+        if deleted:
+            deleted_cycle_ids.append(cycle_id)
+
+        return deleted_cycle_ids
+
+    async def list_existing_cycle_ids(
+        self,
+        workspace_id: str,
+        max_cycle_id: int | None = None,
+    ) -> list[int]:
+        """
+        List distinct cycle IDs known from cycle outputs or created nodes.
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        cycle_filter = ""
+        nodes_filter = ""
+        params: list[Any] = [workspace_id]
+        if max_cycle_id is not None:
+            cycle_filter = " AND cycle_id <= ?"
+            params.append(max_cycle_id)
+
+        params.append(workspace_id)
+        if max_cycle_id is not None:
+            nodes_filter = " AND created_by_cycle <= ?"
+            params.append(max_cycle_id)
+
+        async with self._get_db() as db:
+            cursor = await db.execute(
+                f"""
+                SELECT cycle_id FROM cycle_outputs
+                WHERE workspace_id = ?{cycle_filter}
+                UNION
+                SELECT created_by_cycle AS cycle_id FROM nodes
+                WHERE workspace_id = ? AND created_by_cycle >= 0{nodes_filter}
+                ORDER BY cycle_id ASC
+                """,
+                tuple(params),
+            )
+            rows = await cursor.fetchall()
+
+        return [int(row[0]) for row in rows]
 
     async def delete_old_cycle_outputs(
         self,

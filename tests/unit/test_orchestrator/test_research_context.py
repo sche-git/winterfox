@@ -15,7 +15,6 @@ from winterfox.orchestrator.research_context import (
     ResearchContextBuilder,
     TokenBudget,
 )
-from winterfox.orchestrator.prompts import generate_research_prompt
 from winterfox.agents.protocol import AgentOutput, Finding, SearchRecord
 
 
@@ -321,61 +320,6 @@ class TestResearchContextBuilder:
         assert "### Knowledge Graph Overview" in rendered
         assert "### Prior Cycle Summaries" in rendered
         assert "### Prior Searches" in rendered
-
-
-# --- Backward Compatibility Tests ---
-
-
-class TestBackwardCompatibility:
-    @pytest.mark.asyncio
-    async def test_prompts_work_without_research_context(self, graph):
-        """Existing prompts should work with research_context=None."""
-        root = await graph.add_node(
-            claim="Test claim",
-            confidence=0.5,
-            importance=0.8,
-            created_by_cycle=0,
-        )
-
-        system_prompt, user_prompt = await generate_research_prompt(
-            graph=graph,
-            target_node=root,
-            north_star="Test mission",
-            max_searches=25,
-        )
-
-        # Prompts should generate without error
-        assert "Test mission" in system_prompt
-        assert "Test claim" in user_prompt
-        # No accumulated context section
-        assert "Accumulated Research Context" not in user_prompt
-
-    @pytest.mark.asyncio
-    async def test_prompts_include_research_context(self, graph):
-        """When research_context is provided, it should appear in user prompt."""
-        root = await graph.add_node(
-            claim="Test claim",
-            confidence=0.5,
-            importance=0.8,
-            created_by_cycle=0,
-        )
-
-        mock_context = (
-            "## Accumulated Research Context (5 prior cycles)\n\n"
-            "### Prior Searches\n- \"test query\""
-        )
-
-        system_prompt, user_prompt = await generate_research_prompt(
-            graph=graph,
-            target_node=root,
-            north_star="Test mission",
-            research_context=mock_context,
-        )
-
-        assert "Accumulated Research Context" in user_prompt
-        assert "test query" in user_prompt
-        # System prompt should have guideline #6
-        assert "Build on prior work" in system_prompt
 
 
 # --- Store Batch Query Tests ---

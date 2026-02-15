@@ -122,7 +122,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
         </div>
 
         {/* Claim text */}
-        <span className="ml-1.5 min-w-0 flex-1 truncate text-xs">
+        <span className="ml-1.5 min-w-0 flex-1 text-xs leading-snug whitespace-normal break-words">
           {parsed.claim}
         </span>
 

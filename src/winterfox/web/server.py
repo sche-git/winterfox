@@ -51,6 +51,7 @@ def create_app(
         # Initialize services
         graph.init_graph_service(db_path, workspace_id)
         config_api.init_config(config_path)
+        cycles.init_cycle_runner(config_path, db_path, workspace_id)
 
         logger.info("Dashboard ready")
 
@@ -58,6 +59,7 @@ def create_app(
 
         # Shutdown
         logger.info("Shutting down dashboard...")
+        await cycles.shutdown_cycle_runner()
         await graph.shutdown_graph_service()
         logger.info("Dashboard stopped")
 

@@ -10,8 +10,8 @@ import { cn } from '@/lib/utils';
 
 const navItems: { page: Page; label: string; icon: React.ElementType }[] = [
   { page: 'overview', label: 'Overview', icon: BarChart3 },
-  { page: 'graph', label: 'Knowledge Graph', icon: GitFork },
-  { page: 'history', label: 'Research Cycles', icon: History },
+  { page: 'graph', label: 'Research Map', icon: GitFork },
+  { page: 'history', label: 'Research Timeline', icon: History },
   { page: 'report', label: 'Report', icon: FileText },
 ];
 
@@ -26,7 +26,12 @@ const Sidebar: React.FC = () => {
     <aside className="flex h-screen w-64 shrink-0 flex-col border-r bg-card">
       {/* Logo */}
       <div className="border-b px-6 py-5">
-        <div className="flex items-center gap-2.5">
+        <button
+          type="button"
+          onClick={() => setCurrentPage('overview')}
+          className="flex items-center gap-2.5 text-left"
+          aria-label="Go to Overview"
+        >
           <img
             src="/fox-logo.png"
             alt="Winterfox"
@@ -34,11 +39,8 @@ const Sidebar: React.FC = () => {
           />
           <div>
             <h1 className="text-lg font-bold tracking-tight">Winterfox</h1>
-            <p className="text-xs uppercase tracking-wide text-muted-foreground">
-              Research Console
-            </p>
           </div>
-        </div>
+        </button>
       </div>
 
       {/* Navigation */}

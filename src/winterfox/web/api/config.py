@@ -7,16 +7,20 @@ Provides:
 
 import logging
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from ...config import ResearchConfig, load_config
+from ..api.graph import get_graph_service
 from ..models.api_models import (
     AgentConfigResponse,
     ConfigResponse,
+    ContextDocumentResponse,
     LeadAgentConfigResponse,
     SearchProviderResponse,
 )
+from ..services.graph_service import GraphService
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +46,9 @@ def init_config(config_path: Path) -> None:
 
 
 @router.get("", response_model=ConfigResponse)
-async def get_config() -> ConfigResponse:
+async def get_config(
+    graph_service: Annotated[GraphService, Depends(get_graph_service)],
+) -> ConfigResponse:
     """
     Get project configuration (without sensitive data).
 
@@ -79,6 +85,19 @@ async def get_config() -> ConfigResponse:
             for provider in _config.search.providers
         ]
 
+        search_instructions = _config.get_search_instructions(_config_path.parent)
+        context_documents_raw = await graph_service.get_context_documents()
+        if not context_documents_raw:
+            context_documents_raw = _config.get_context_files_content(_config_path.parent)
+
+        context_documents = [
+            ContextDocumentResponse(
+                filename=doc["filename"],
+                content=doc["content"],
+            )
+            for doc in context_documents_raw
+        ]
+
         return ConfigResponse(
             project_name=_config.project.name,
             north_star=north_star,
@@ -90,6 +109,8 @@ async def get_config() -> ConfigResponse:
             ),
             agents=agents,
             search_providers=search_providers,
+            search_instructions=search_instructions,
+            context_documents=context_documents,
         )
     except Exception as e:
         logger.error(f"Failed to get config: {e}", exc_info=True)

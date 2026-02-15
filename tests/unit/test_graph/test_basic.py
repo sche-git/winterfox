@@ -353,5 +353,84 @@ async def test_workspace_isolation(graph):
     await graph2.close()
 
 
+@pytest.mark.asyncio
+async def test_delete_cycle_recursive_deletes_descendant_cycles_first(graph):
+    """Test recursive cycle deletion when descendant cycles depend on parent nodes."""
+    root = await graph.add_node(
+        claim="Root direction",
+        created_by_cycle=1,
+    )
+    child = await graph.add_node(
+        claim="Child direction",
+        parent_id=root.id,
+        created_by_cycle=2,
+    )
+
+    await graph.save_cycle_output(
+        cycle_id=1,
+        target_node=root,
+        agent_outputs=[],
+        synthesis_result=None,
+        merge_stats={"created": 1, "updated": 0, "skipped": 0},
+        duration_seconds=1.0,
+        total_cost_usd=0.01,
+    )
+    await graph.save_cycle_output(
+        cycle_id=2,
+        target_node=root,
+        agent_outputs=[],
+        synthesis_result=None,
+        merge_stats={"created": 1, "updated": 0, "skipped": 0},
+        duration_seconds=1.0,
+        total_cost_usd=0.01,
+    )
+    await graph.save_cycle_output(
+        cycle_id=3,
+        target_node=child,
+        agent_outputs=[],
+        synthesis_result=None,
+        merge_stats={"created": 1, "updated": 0, "skipped": 0},
+        duration_seconds=1.0,
+        total_cost_usd=0.01,
+    )
+
+    deleted = await graph.delete_cycle_recursive(workspace_id="test", cycle_id=1)
+
+    assert deleted == [3, 2, 1]
+    assert await graph.get_cycle_output(1) is None
+    assert await graph.get_cycle_output(2) is None
+    assert await graph.get_cycle_output(3) is None
+    assert await graph.count_nodes() == 0
+
+
+@pytest.mark.asyncio
+async def test_list_existing_cycle_ids_combines_outputs_and_nodes(graph):
+    """Test cycle ID listing from both cycle_outputs and nodes tables."""
+    node_cycle_1 = await graph.add_node(
+        claim="Node from cycle 1",
+        created_by_cycle=1,
+    )
+    await graph.add_node(
+        claim="Node from cycle 4",
+        created_by_cycle=4,
+    )
+
+    await graph.save_cycle_output(
+        cycle_id=2,
+        target_node=node_cycle_1,
+        agent_outputs=[],
+        synthesis_result=None,
+        merge_stats={"created": 0, "updated": 0, "skipped": 0},
+        duration_seconds=1.0,
+        total_cost_usd=0.01,
+    )
+
+    all_cycle_ids = await graph.list_existing_cycle_ids(workspace_id="test")
+    upto_two = await graph.list_existing_cycle_ids(workspace_id="test", max_cycle_id=2)
+
+    assert all_cycle_ids == [1, 2, 4]
+    assert upto_two == [1, 2]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

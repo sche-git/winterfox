@@ -8,7 +8,6 @@ import {
   Copy,
   Check,
   Download,
-  FileText,
   GitFork,
   Hash,
   Loader2,
@@ -66,8 +65,10 @@ const ReportPage: React.FC = () => {
         }
       })
       .catch((err) => {
-        setError(err.message || 'Failed to load report');
-        setState('error');
+        // Treat load-time failures as an empty state so users get a soft prompt
+        // to generate their first report instead of a hard error wall.
+        setError(err.message || '');
+        setState('empty');
       });
   }, []);
 
@@ -162,12 +163,21 @@ const ReportPage: React.FC = () => {
       <div className="flex h-full items-center justify-center p-8">
         <Card className="max-w-md text-center">
           <CardContent className="p-8">
-            <FileText className="mx-auto h-12 w-12 text-muted-foreground" />
-            <h3 className="mt-4 text-lg font-semibold">No report generated yet</h3>
+            <img
+              src="/fox-logo.png"
+              alt="Winterfox"
+              className="mx-auto h-14 w-14 grayscale contrast-125"
+            />
+            <h3 className="mt-4 text-lg font-semibold">No report available yet</h3>
             <p className="mt-2 text-sm text-muted-foreground">
               Generate a narrative research report synthesized from your knowledge graph.
               This uses the primary LLM and typically takes 30-60 seconds.
             </p>
+            {error && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                We could not load an existing report, so this view is starting fresh.
+              </p>
+            )}
             <Button onClick={handleGenerate} className="mt-6">
               Generate Report
             </Button>

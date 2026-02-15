@@ -128,6 +128,7 @@ const HistoryPage: React.FC = () => {
             const directionUpdated = detail?.directions_updated ?? 0;
             const consensus = detail?.consensus_directions ?? [];
             const panel = panelByCycle[cycle.id] ?? 'insights';
+            const contextContent = detail?.research_context?.trim() ?? '';
 
             return (
               <article
@@ -149,7 +150,13 @@ const HistoryPage: React.FC = () => {
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold">Cycle #{cycle.id}</span>
+                        <button
+                          onClick={() => toggleExpand(cycle)}
+                          className="text-sm font-semibold hover:underline"
+                          aria-label={isOpen ? `Collapse cycle ${cycle.id}` : `Expand cycle ${cycle.id}`}
+                        >
+                          Cycle {cycle.id}
+                        </button>
                         <Badge variant="outline" className="text-[10px] py-0">{formatTimestamp(cycle.started_at)}</Badge>
                       </div>
                       <p className="mt-2 text-sm leading-relaxed">{cycle.target_claim || 'No target claim recorded'}</p>
@@ -164,11 +171,11 @@ const HistoryPage: React.FC = () => {
                   </div>
 
                   <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-                    <Badge variant="secondary">+{directionCreated || cycle.directions_count} directions</Badge>
-                    <Badge variant="secondary">~{directionUpdated} updates</Badge>
-                    <Badge variant="outline">Lead ${cycle.lead_llm_cost_usd.toFixed(3)}</Badge>
-                    <Badge variant="outline">Research ${cycle.research_agents_cost_usd.toFixed(3)}</Badge>
-                    <Badge variant="outline">{formatDuration(cycle.duration_seconds)}</Badge>
+                    <Badge variant="secondary" className="font-normal text-muted-foreground">+{directionCreated || cycle.directions_count} directions</Badge>
+                    <Badge variant="secondary" className="font-normal text-muted-foreground">~{directionUpdated} updates</Badge>
+                    <Badge variant="outline" className="font-normal text-muted-foreground">Lead ${cycle.lead_llm_cost_usd.toFixed(3)}</Badge>
+                    <Badge variant="outline" className="font-normal text-muted-foreground">Research ${cycle.research_agents_cost_usd.toFixed(3)}</Badge>
+                    <Badge variant="outline" className="font-normal text-muted-foreground">{formatDuration(cycle.duration_seconds)}</Badge>
                   </div>
 
                   {isOpen && (
@@ -215,7 +222,7 @@ const HistoryPage: React.FC = () => {
                               {detail.synthesis_reasoning && (
                                 <div>
                                   <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Synthesis</p>
-                                  <p className="line-clamp-5 text-sm leading-relaxed text-muted-foreground">{detail.synthesis_reasoning}</p>
+                                  <p className="line-clamp-5 text-sm leading-relaxed text-foreground">{detail.synthesis_reasoning}</p>
                                 </div>
                               )}
 
@@ -263,9 +270,9 @@ const HistoryPage: React.FC = () => {
                                 </div>
                               ))}
                             </div>
-                          ) : detail.research_context ? (
+                          ) : contextContent ? (
                             <div className="max-h-[520px] overflow-auto rounded-md border p-3">
-                              <MarkdownContent content={detail.research_context} />
+                              <MarkdownContent content={contextContent} />
                             </div>
                           ) : (
                             <p className="text-xs text-muted-foreground">

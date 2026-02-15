@@ -25,6 +25,23 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _render_cycle_instruction(cycle_instruction: str | None) -> str:
+    """Render optional cycle-specific steering guidance."""
+    if not cycle_instruction:
+        return ""
+
+    text = cycle_instruction.strip()
+    if not text:
+        return ""
+
+    return (
+        "\n## Cycle Override Instruction (Highest Priority This Cycle)\n\n"
+        f"{text}\n\n"
+        "This comes from user-provided steering for this cycle. "
+        "Honor it as the primary directive unless it conflicts with safety or factual integrity.\n"
+    )
+
+
 @dataclass
 class Direction:
     """
@@ -57,6 +74,17 @@ class ResearchDispatchResult:
     focused_view: str
     system_prompt: str
     user_prompt: str
+
+
+@dataclass
+class TargetReassessment:
+    """Lead LLM reassessment of a target direction after a research cycle."""
+
+    confidence: float
+    importance: float
+    status: str
+    reasoning: str
+    cost_usd: float = 0.0
 
 
 class LeadLLM:
@@ -97,6 +125,8 @@ class LeadLLM:
     async def select_direction(
         self,
         last_selected_id: str | None = None,
+        cycle_instruction: str | None = None,
+        excluded_node_ids: set[str] | None = None,
     ) -> tuple[KnowledgeNode, str]:
         """
         Lead LLM strategically selects which direction to pursue next.
@@ -110,6 +140,8 @@ class LeadLLM:
 
         Args:
             last_selected_id: ID of previously selected node (optional)
+            cycle_instruction: Optional cycle-specific steering guidance
+            excluded_node_ids: Optional node IDs that must not be selected
 
         Returns:
             (target_node, selection_reasoning) tuple
@@ -124,13 +156,17 @@ class LeadLLM:
 
         # Get all nodes for Lead to choose from
         all_nodes = await self.graph.get_all_active_nodes()
+        excluded = excluded_node_ids or set()
+        candidate_nodes = [node for node in all_nodes if node.id not in excluded]
 
         if not all_nodes:
             raise ValueError("No active nodes in graph - cannot select direction")
+        if not candidate_nodes:
+            raise ValueError("No eligible active nodes remain after exclusions")
 
         # Format node options for Lead LLM
         node_options = []
-        for node in all_nodes[:30]:  # Limit to 30 most relevant
+        for node in candidate_nodes[:30]:  # Limit to 30 most relevant
             claim_preview = node.claim[:100] + "..." if len(node.claim) > 100 else node.claim
             node_options.append(
                 f"- **{node.id[:8]}**: {claim_preview}\n"
@@ -140,6 +176,7 @@ class LeadLLM:
             )
 
         node_list = "\n".join(node_options)
+        cycle_instruction_section = _render_cycle_instruction(cycle_instruction)
 
         # Build selection prompt
         system_prompt = f"""You are the Lead LLM orchestrating an autonomous research project:
@@ -149,11 +186,21 @@ class LeadLLM:
 Your role is to strategically select which direction to pursue next in the knowledge graph.
 You have maximum autonomy - analyze the current state and make the best strategic decision.
 
+## Priority Order
+
+1. **Honor user steering first**:
+   - If a cycle override instruction is present, align selection to that intent.
+2. **Maintain balanced progress**:
+   - Avoid tunnel vision on a single branch when credible alternatives remain unexplored.
+3. **Maximize useful learning**:
+   - Prefer choices that reduce key uncertainty and improve decision quality.
+
 ## Strategic Considerations
 
 1. **Exploration vs Exploitation Balance**
    - Explore: Pursue directions with low depth and few children (breadth)
    - Exploit: Deepen directions with low confidence but high importance (depth)
+   - Keep a healthy portfolio across cycles instead of repeatedly selecting the same local area
 
 2. **Confidence Gaps**
    - Prioritize directions with low confidence (<0.6) if they're important
@@ -165,11 +212,12 @@ You have maximum autonomy - analyze the current state and make the best strategi
 
 4. **Research Momentum**
    - Build on recent progress where appropriate
-   - Don't get stuck in local minima
+   - Don't get stuck in local minima or repetitive deep dives
 
 5. **Strategic Value**
    - Importance score reflects strategic relevance to mission
    - High importance, low confidence = high priority
+{cycle_instruction_section}
 
 ## Output Format
 
@@ -193,6 +241,14 @@ Respond with ONLY this JSON structure:
             if last_node:
                 last_selected_section = f"\n## Last Selected Direction\n\n**{last_node.claim[:100]}**\n(ID: {last_selected_id})\n\nConsider whether to continue building on this or pivot to a different direction.\n"
 
+        excluded_section = ""
+        if excluded:
+            excluded_list = "\n".join(f"- {node_id}" for node_id in sorted(excluded)[:30])
+            excluded_section = (
+                "\n## Excluded Directions (Do Not Select)\n\n"
+                f"{excluded_list}\n"
+            )
+
         user_prompt = f"""## Graph State
 
 {graph_summary}
@@ -204,7 +260,7 @@ Respond with ONLY this JSON structure:
 ## All Available Directions
 
 {node_list}
-{report_section}{last_selected_section}
+{report_section}{last_selected_section}{excluded_section}
 ---
 
 Analyze the graph state and select the best direction to pursue next.
@@ -233,7 +289,7 @@ Respond with ONLY the JSON structure specified (no markdown, no explanation outs
             logger.warning(f"Lead LLM response not in JSON format: {raw_text[:200]}")
             # Fallback to first node
             logger.warning("Falling back to first available node")
-            return all_nodes[0], "Fallback selection (Lead LLM response parse failed)"
+            return candidate_nodes[0], "Fallback selection (Lead LLM response parse failed)"
 
         try:
             selection_data = json.loads(json_match.group())
@@ -253,7 +309,11 @@ Respond with ONLY the JSON structure specified (no markdown, no explanation outs
             if not target:
                 logger.warning(f"Lead LLM selected invalid node ID: {selected_id}")
                 logger.warning("Falling back to first available node")
-                return all_nodes[0], f"Fallback selection (invalid ID: {selected_id})"
+                return candidate_nodes[0], f"Fallback selection (invalid ID: {selected_id})"
+            if target.id in excluded:
+                logger.warning(f"Lead LLM selected excluded node ID: {selected_id}")
+                logger.warning("Falling back to first non-excluded node")
+                return candidate_nodes[0], f"Fallback selection (excluded ID: {selected_id})"
 
             logger.info(f"Lead LLM selected: {target.claim[:50]}... (Reason: {reasoning[:100]}...)")
             return target, reasoning
@@ -261,7 +321,7 @@ Respond with ONLY the JSON structure specified (no markdown, no explanation outs
         except (json.JSONDecodeError, KeyError) as e:
             logger.warning(f"Failed to parse Lead LLM selection: {e}")
             logger.warning(f"Raw response: {raw_text[:200]}")
-            return all_nodes[0], f"Fallback selection (parse error: {e})"
+            return candidate_nodes[0], f"Fallback selection (parse error: {e})"
 
     async def dispatch_research(
         self,
@@ -269,6 +329,7 @@ Respond with ONLY the JSON structure specified (no markdown, no explanation outs
         research_agents: list[AgentAdapter],
         tools: list,
         max_searches: int,
+        cycle_instruction: str | None = None,
     ) -> ResearchDispatchResult:
         """
         Lead LLM dispatches research agents in parallel.
@@ -281,6 +342,7 @@ Respond with ONLY the JSON structure specified (no markdown, no explanation outs
             research_agents: List of research agent adapters
             tools: Available research tools
             max_searches: Maximum searches per agent
+            cycle_instruction: Optional cycle-specific steering guidance
 
         Returns:
             ResearchDispatchResult containing agent outputs and prompt context
@@ -291,6 +353,7 @@ Respond with ONLY the JSON structure specified (no markdown, no explanation outs
 
         # Generate focused view of target direction
         focused_view = await render_focused_view(self.graph, target_node.id, max_depth=3)
+        cycle_instruction_section = _render_cycle_instruction(cycle_instruction)
 
         # Build research system prompt (no note_finding tool)
         system_prompt = f"""You are an expert research agent working on:
@@ -306,6 +369,8 @@ Your task is to research a specific direction thoroughly using web search and co
 3. **Skeptical**: Look for contradicting viewpoints
 4. **Comprehensive**: Cover all aspects of the research direction
 5. **Budget**: You have {max_searches} web searches - use them effectively
+6. **Stay broad enough**: Test adjacent hypotheses and alternatives, not just the first promising thread
+7. **Align with user steering**: If a cycle override instruction is present, treat it as the primary objective for this cycle
 
 ## Important Changes
 
@@ -319,6 +384,7 @@ Your task is to research a specific direction thoroughly using web search and co
 - `web_fetch`: Read full content from URLs
 - `read_graph_node`: Read other nodes in the knowledge graph
 - `search_graph`: Search the knowledge graph
+{cycle_instruction_section}
 
 After your research, you'll be asked for a brief self-critique."""
 
@@ -371,6 +437,7 @@ Begin your research. Remember: your raw output will be analyzed by the Lead LLM 
         self,
         agent_outputs: list[AgentOutput],
         target_node: KnowledgeNode,
+        cycle_instruction: str | None = None,
     ) -> DirectionSynthesis:
         """
         Lead LLM extracts strategic directions from raw research outputs.
@@ -381,6 +448,7 @@ Begin your research. Remember: your raw output will be analyzed by the Lead LLM 
         Args:
             agent_outputs: Raw outputs from research agents
             target_node: Direction that was researched
+            cycle_instruction: Optional cycle-specific steering guidance
 
         Returns:
             DirectionSynthesis with extracted directions
@@ -402,6 +470,7 @@ Begin your research. Remember: your raw output will be analyzed by the Lead LLM 
             )
 
         combined_outputs = "".join(formatted_outputs)
+        cycle_instruction_section = _render_cycle_instruction(cycle_instruction)
 
         # Build synthesis system prompt
         system_prompt = f"""You are the Lead LLM synthesizing research for:
@@ -428,6 +497,7 @@ NOT directions (too granular):
    - Look for strategic questions, approaches, or hypotheses
    - Group related findings into coherent directions
    - Each direction should suggest a path of inquiry
+   - Preserve both breadth-oriented and depth-oriented next steps when warranted by evidence
 
 2. **Assess Confidence**:
    - High (0.8-1.0): Multiple agents agree, strong evidence
@@ -446,6 +516,11 @@ NOT directions (too granular):
 5. **Spot Contradictions**:
    - What disagreements exist?
    - Which claims conflict?
+
+6. **Respect User Steering**:
+   - If a cycle override instruction is present, bias synthesis priorities to that instruction
+   - Keep conclusions evidence-grounded and avoid overfitting to a single narrative
+{cycle_instruction_section}
 
 ## Output Format
 
@@ -564,4 +639,139 @@ Respond with ONLY the JSON structure (no markdown, no extra text).
                 synthesis_reasoning=f"Synthesis parse error: {e}",
                 consensus_directions=[],
                 contradictions=[],
+            )
+
+    async def reassess_target_direction(
+        self,
+        target_node: KnowledgeNode,
+        agent_outputs: list[AgentOutput],
+        synthesis: DirectionSynthesis,
+    ) -> TargetReassessment:
+        """
+        Reassess target direction confidence/importance after new research.
+
+        This is a pure LLM judgment step. No heuristic blending is applied.
+        """
+        logger.info(f"Lead LLM reassessing target direction {target_node.id[:8]}...")
+
+        # Keep prompt compact but informative.
+        agent_summaries: list[str] = []
+        for i, output in enumerate(agent_outputs, 1):
+            raw_excerpt = output.raw_text[:1400]
+            critique_excerpt = output.self_critique[:400] if output.self_critique else ""
+            agent_summaries.append(
+                f"## Agent {i}: {output.agent_name}\n"
+                f"- Searches: {len(output.searches_performed)}\n"
+                f"- Cost: ${output.cost_usd:.4f}\n"
+                f"- Raw excerpt:\n{raw_excerpt}\n\n"
+                f"- Self-critique:\n{critique_excerpt}\n"
+            )
+
+        directions_preview = "\n".join(
+            [
+                f"- {d.claim} (conf={d.confidence:.2f}, imp={d.importance:.2f})"
+                for d in synthesis.directions[:12]
+            ]
+        )
+        consensus_preview = "\n".join(f"- {c}" for c in synthesis.consensus_directions[:10]) or "- none"
+        contradiction_preview = "\n".join(f"- {c}" for c in synthesis.contradictions[:10]) or "- none"
+
+        system_prompt = f"""You are the Lead LLM for this research mission:
+
+{self.north_star}
+
+You must reassess ONE target direction after a completed research cycle.
+
+Rules:
+- Use only the provided cycle evidence and synthesis.
+- Provide direct judgment (no averaging formula, no blending instructions).
+- Keep scores in [0.0, 1.0].
+- Confidence reflects how strongly the direction is now validated.
+- Importance reflects strategic relevance to the mission now.
+- Decide lifecycle status:
+  - active: continue investing
+  - completed: sufficiently answered for now
+  - closed: not viable / low strategic value now
+
+Return ONLY JSON:
+{{
+  "confidence": 0.0,
+  "importance": 0.0,
+  "status": "active|completed|closed",
+  "reasoning": "2-4 sentences explaining why these updated scores are justified by this cycle."
+}}"""
+
+        agent_evidence_summary = "\n\n".join(agent_summaries)
+
+        user_prompt = f"""## Target Direction
+- ID: {target_node.id}
+- Claim: {target_node.claim}
+- Previous confidence: {target_node.confidence:.2f}
+- Previous importance: {target_node.importance:.2f}
+
+## Synthesized Directions From This Cycle
+{directions_preview if directions_preview else "- none"}
+
+## Consensus
+{consensus_preview}
+
+## Contradictions
+{contradiction_preview}
+
+## Agent Evidence Summary
+{agent_evidence_summary}
+
+Reassess the target direction and return ONLY the JSON schema."""
+
+        output = await self.adapter.run(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            tools=[],
+            max_iterations=1,
+        )
+
+        import json
+        import re
+
+        raw_text = output.raw_text.strip()
+        json_match = re.search(r"\{.*\"confidence\".*\"importance\".*\}", raw_text, re.DOTALL)
+
+        if not json_match:
+            logger.warning("Target reassessment response not valid JSON; keeping existing scores")
+            return TargetReassessment(
+                confidence=target_node.confidence,
+                importance=target_node.importance,
+                status=target_node.status,
+                reasoning="Reassessment parse failed; retained previous scores.",
+                cost_usd=output.cost_usd,
+            )
+
+        try:
+            data = json.loads(json_match.group())
+            confidence = float(data["confidence"])
+            importance = float(data["importance"])
+            status = str(data.get("status", target_node.status)).strip().lower()
+            reasoning = str(data.get("reasoning", "")).strip()
+
+            # Hard bounds for data integrity only (not heuristic scoring logic).
+            confidence = max(0.0, min(1.0, confidence))
+            importance = max(0.0, min(1.0, importance))
+            if status not in {"active", "completed", "closed"}:
+                status = target_node.status
+
+            return TargetReassessment(
+                confidence=confidence,
+                importance=importance,
+                status=status,
+                reasoning=reasoning,
+                cost_usd=output.cost_usd,
+            )
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            logger.warning(f"Failed to parse target reassessment JSON: {e}")
+            return TargetReassessment(
+                confidence=target_node.confidence,
+                importance=target_node.importance,
+                status=target_node.status,
+                reasoning=f"Reassessment parse error: {e}; retained previous scores.",
+                cost_usd=output.cost_usd,
             )

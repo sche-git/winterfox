@@ -66,10 +66,20 @@ class GraphService:
             await self._graph.close()
             self._graph = None
 
+    async def get_context_documents(self) -> list[dict[str, str]]:
+        """Get persisted project context documents for this workspace."""
+        graph = await self._get_graph()
+        return await graph.get_context_documents()
+
     def _node_to_response(self, node: KnowledgeNode) -> NodeResponse:
         """Convert KnowledgeNode to NodeResponse."""
         # Map internal statuses to API-compatible ones
-        status_map = {"killed": "archived", "speculative": "active"}
+        status_map = {
+            "killed": "archived",
+            "closed": "archived",
+            "completed": "archived",
+            "speculative": "active",
+        }
         api_status = status_map.get(node.status, node.status)
 
         return NodeResponse(

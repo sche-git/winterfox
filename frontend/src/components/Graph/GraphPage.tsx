@@ -1,10 +1,10 @@
 /**
- * Knowledge Graph page with 40/60 split: tree + node detail.
+ * Research Map page with interactive bubble graph + node detail.
  */
 
 import React, { useEffect } from 'react';
 import { useGraphStore } from '../../stores/graphStore';
-import TreeView from './TreeView';
+import ResearchMap from './ResearchMap';
 import NodeDetail from './NodeDetail';
 
 const GraphPage: React.FC = () => {
@@ -18,14 +18,14 @@ const GraphPage: React.FC = () => {
   }, []);
 
   return (
-    <div className="flex h-full">
-      {/* Tree panel (40%) */}
-      <div className="w-[40%] border-r h-full overflow-hidden">
-        <TreeView />
+    <div className="flex h-full gap-3 p-3">
+      {/* Map panel */}
+      <div className="h-full w-[58%] overflow-hidden">
+        <ResearchMap />
       </div>
 
-      {/* Detail panel (60%) */}
-      <div className="w-[60%]">
+      {/* Detail panel */}
+      <div className="h-full w-[42%] overflow-hidden rounded-xl border bg-card">
         <NodeDetail />
       </div>
     </div>

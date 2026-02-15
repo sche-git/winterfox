@@ -172,6 +172,17 @@ export interface ActiveCycle {
   progress_percent: number;
 }
 
+export interface RunCycleRequest {
+  target_node_id?: string;
+  cycle_instruction?: string;
+}
+
+export interface RunCycleResponse {
+  cycle_id: number;
+  status: 'running';
+  started_at: string;
+}
+
 // Stats types
 
 export interface GraphStats {
@@ -241,6 +252,11 @@ export interface SearchProvider {
   enabled: boolean;
 }
 
+export interface ContextDocument {
+  filename: string;
+  content: string;
+}
+
 export interface Config {
   project_name: string;
   north_star: string;
@@ -248,6 +264,8 @@ export interface Config {
   lead_agent: LeadAgentConfig;
   agents: AgentConfig[];
   search_providers: SearchProvider[];
+  search_instructions: string | null;
+  context_documents: ContextDocument[];
 }
 
 // Report types

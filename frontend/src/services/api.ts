@@ -12,6 +12,8 @@ import type {
   CyclesListResponse,
   CycleDetail,
   ActiveCycle,
+  RunCycleRequest,
+  RunCycleResponse,
   OverviewStats,
   TimelineResponse,
   Config,
@@ -94,9 +96,36 @@ class WinterfoxAPI {
   async getCycle(cycleId: number): Promise<CycleDetail> {
     const response = await this.client.get<CycleDetail>(`/api/cycles/${cycleId}`);
     const detail = response.data;
+    const detailAny = detail as CycleDetail & {
+      context_used?: unknown;
+      context_snapshot?: unknown;
+      researchContext?: unknown;
+    };
+
+    // Accept current and legacy context field shapes.
+    const rawContext =
+      detailAny.research_context ??
+      detailAny.context_used ??
+      detailAny.context_snapshot ??
+      detailAny.researchContext ??
+      null;
+
+    const normalizedContext =
+      typeof rawContext === 'string'
+        ? (rawContext.trim() || null)
+        : rawContext && typeof rawContext === 'object'
+          ? ([
+              (rawContext as Record<string, unknown>).focused_view,
+              (rawContext as Record<string, unknown>).system_prompt,
+              (rawContext as Record<string, unknown>).user_prompt,
+            ]
+              .filter((part): part is string => typeof part === 'string' && part.trim().length > 0)
+              .join('\n\n') || null)
+          : null;
+
     return {
       ...detail,
-      research_context: detail.research_context ?? null,
+      research_context: normalizedContext,
       directions_created: detail.directions_created ?? detail.findings_created ?? 0,
       directions_updated: detail.directions_updated ?? detail.findings_updated ?? 0,
       directions_skipped: detail.directions_skipped ?? detail.findings_skipped ?? 0,
@@ -111,6 +140,11 @@ class WinterfoxAPI {
 
   async getActiveCycle(): Promise<ActiveCycle> {
     const response = await this.client.get<ActiveCycle>('/api/cycles/active');
+    return response.data;
+  }
+
+  async runCycle(payload: RunCycleRequest = {}): Promise<RunCycleResponse> {
+    const response = await this.client.post<RunCycleResponse>('/api/cycles', payload);
     return response.data;
   }
 
@@ -156,6 +190,8 @@ class WinterfoxAPI {
         model: '',
         supports_native_search: false,
       }),
+      search_instructions: cfg.search_instructions ?? null,
+      context_documents: cfg.context_documents ?? [],
     };
   }
 

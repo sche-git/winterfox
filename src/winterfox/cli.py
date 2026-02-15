@@ -691,7 +691,24 @@ def _derive_initial_direction_claim(north_star: str) -> str:
 @app.command()
 def run(
     n: int = typer.Option(1, "--count", "-n", help="Number of cycles to run"),
+    parallel_targets: int = typer.Option(
+        1,
+        "--parallel-targets",
+        "-p",
+        help="Number of distinct targets to run in parallel per round",
+    ),
+    parallel_shortage_policy: str = typer.Option(
+        "fail",
+        "--parallel-shortage-policy",
+        help="When eligible targets < parallel-targets: fail | shrink | single_fallback",
+    ),
     focus: Optional[str] = typer.Option(None, "--focus", "-f", help="Specific node ID to research"),
+    instruction: Optional[str] = typer.Option(
+        None,
+        "--instruction",
+        "-i",
+        help="One-off override instruction for this run (applied to each cycle in this command)",
+    ),
     no_consensus: bool = typer.Option(
         False,
         "--no-consensus",
@@ -715,13 +732,26 @@ def run(
     Example:
         winterfox run                    # Run 1 cycle
         winterfox run -n 10              # Run 10 cycles
+        winterfox run -n 8 -p 4          # Run 8 cycles in parallel rounds of 4
         winterfox run --focus node-123   # Research specific node
+        winterfox run -i "Prioritize regulation risks this cycle"
         winterfox run -n 5 --report      # Run 5 cycles, then generate report
     """
     setup_logging(level=log_level)
 
     try:
-        asyncio.run(_run_cycles(config, n, focus, not no_consensus, report))
+        asyncio.run(
+            _run_cycles(
+                config,
+                n,
+                focus,
+                not no_consensus,
+                report,
+                instruction,
+                parallel_targets,
+                parallel_shortage_policy,
+            )
+        )
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted by user[/yellow]")
         raise typer.Exit(0)
@@ -736,12 +766,21 @@ async def _run_cycles(
     focus_node_id: Optional[str],
     use_consensus: bool,
     generate_report: bool = False,
+    cycle_instruction: str | None = None,
+    parallel_targets: int = 1,
+    parallel_shortage_policy: str = "fail",
 ) -> None:
     """Run research cycles."""
     if not use_consensus:
         console.print(
             "[yellow]Warning:[/yellow] --no-consensus is deprecated and ignored."
         )
+    if parallel_targets < 1:
+        raise ValueError("--parallel-targets must be >= 1")
+    if parallel_shortage_policy not in {"fail", "shrink", "single_fallback"}:
+        raise ValueError("--parallel-shortage-policy must be one of: fail, shrink, single_fallback")
+    if focus_node_id and parallel_targets > 1:
+        raise ValueError("--focus cannot be combined with --parallel-targets > 1")
 
     # Load configuration
     config = load_config(config_path)
@@ -751,6 +790,7 @@ async def _run_cycles(
 
     graph = KnowledgeGraph(str(config.storage.db_path), workspace_id=config.multi_tenancy.workspace_id)
     await graph.initialize()
+    await _sync_context_documents_to_db(graph, config, config_path)
 
     # Check if graph is empty
     nodes = await graph.get_all_active_nodes()
@@ -921,35 +961,59 @@ async def _run_cycles(
         console=console,
     ) as progress:
         task = progress.add_task(f"Running {n} cycle{'s' if n != 1 else ''}...", total=n)
+        completed = 0
 
-        for i in range(n):
-            progress.update(task, description=f"Cycle {i + 1}/{n}")
-
-            result = await orchestrator.run_cycle(
-                target_node_id=focus_node_id,
+        while completed < n:
+            remaining = n - completed
+            batch_size = min(parallel_targets, remaining)
+            progress.update(
+                task,
+                description=f"Cycle {completed + 1}-{completed + batch_size}/{n}",
             )
 
-            # Show cycle result
-            if result.success:
-                console.print(
-                    f"\n[green]✓[/green] Cycle {result.cycle_id}: "
-                    f"{result.directions_created} created, {result.directions_updated} updated | "
-                    f"${result.total_cost_usd:.4f} | {result.duration_seconds:.1f}s"
-                )
-
-                # Show concise per-agent stats (raw-output architecture)
-                for output in result.agent_outputs:
-                    console.print(
-                        f"  [bold cyan]{output.agent_name}[/bold cyan]: "
-                        f"{len(output.searches_performed)} searches | "
-                        f"${output.cost_usd:.4f} | {output.duration_seconds:.1f}s"
+            if batch_size == 1:
+                results = [
+                    await orchestrator.run_cycle(
+                        target_node_id=focus_node_id,
+                        cycle_instruction=cycle_instruction,
                     )
+                ]
             else:
-                console.print(
-                    f"\n[red]✗[/red] Cycle {result.cycle_id} failed: {result.error_message}"
-                )
+                from .orchestrator.core import ParallelTargetShortageError
 
-            progress.advance(task)
+                try:
+                    results = await orchestrator.run_parallel_round(
+                        parallel_targets=batch_size,
+                        cycle_instruction=cycle_instruction,
+                        shortage_policy=parallel_shortage_policy,
+                    )
+                except ParallelTargetShortageError as e:
+                    raise ValueError(str(e)) from e
+
+            if not results:
+                raise RuntimeError("No cycles executed in this round")
+
+            for result in results:
+                if result.success:
+                    console.print(
+                        f"\n[green]✓[/green] Cycle {result.cycle_id}: "
+                        f"{result.directions_created} created, {result.directions_updated} updated | "
+                        f"${result.total_cost_usd:.4f} | {result.duration_seconds:.1f}s"
+                    )
+
+                    for output in result.agent_outputs:
+                        console.print(
+                            f"  [bold cyan]{output.agent_name}[/bold cyan]: "
+                            f"{len(output.searches_performed)} searches | "
+                            f"${output.cost_usd:.4f} | {output.duration_seconds:.1f}s"
+                        )
+                else:
+                    console.print(
+                        f"\n[red]✗[/red] Cycle {result.cycle_id} failed: {result.error_message}"
+                    )
+
+            completed += len(results)
+            progress.advance(task, advance=len(results))
 
     # Show graph state
     console.print(f"\n{orchestrator.get_summary()}")
@@ -971,6 +1035,19 @@ async def _run_cycles(
         )
 
     await graph.close()
+
+
+async def _sync_context_documents_to_db(
+    graph: Any,
+    config: ResearchConfig,
+    config_path: Path,
+) -> None:
+    """Persist configured context documents into the workspace database."""
+    try:
+        context_documents = config.get_context_files_content(config_path.parent)
+        await graph.upsert_context_documents(context_documents, clear_existing=True)
+    except Exception as e:
+        console.print(f"[yellow]Warning:[/yellow] Failed to sync context documents to DB: {e}")
 
 
 @app.command()
@@ -1356,8 +1433,20 @@ async def _interactive_mode(config_path: Path) -> None:
     ))
 
     while True:
+        cycle_instruction = typer.prompt(
+            "Optional cycle override instruction (Enter to skip)",
+            default="",
+            show_default=False,
+        ).strip() or None
+
         # Run single cycle
-        await _run_cycles(config_path, n=1, focus_node_id=None, use_consensus=True)
+        await _run_cycles(
+            config_path,
+            n=1,
+            focus_node_id=None,
+            use_consensus=True,
+            cycle_instruction=cycle_instruction,
+        )
 
         # Show current status
         await _show_status(config_path, max_depth=2)
@@ -1374,7 +1463,18 @@ async def _interactive_mode(config_path: Path) -> None:
             break
         elif action.lower() == "f":
             focus_area = typer.prompt("Enter node ID to focus on")
-            await _run_cycles(config_path, n=1, focus_node_id=focus_area, use_consensus=True)
+            cycle_instruction = typer.prompt(
+                "Optional cycle override instruction (Enter to skip)",
+                default="",
+                show_default=False,
+            ).strip() or None
+            await _run_cycles(
+                config_path,
+                n=1,
+                focus_node_id=focus_area,
+                use_consensus=True,
+                cycle_instruction=cycle_instruction,
+            )
         elif action.lower() == "s":
             node_id = typer.prompt("Enter node ID to show")
             await _show_node(config_path, node_id, depth=2)
@@ -1588,15 +1688,15 @@ async def _list_cycle_outputs(
 
 @cycle_app.command("remove")
 def cycle_remove(
-    cycle_id: int = typer.Argument(..., help="Cycle ID to delete"),
+    cycle_id: int = typer.Argument(..., help="Delete cycles from 0 through this cycle ID (inclusive)"),
     config: Path = typer.Option(Path("winterfox.toml"), "--config", "-c"),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
 ) -> None:
     """
-    Delete a cycle and its associated data.
+    Delete cycle history up to a cycle ID, including descendant cycles.
 
     Removes cycle output, agent outputs, and graph operations for the cycle.
-    Does NOT remove knowledge graph nodes created by the cycle.
+    Also removes graph nodes created by deleted cycles.
 
     Examples:
         winterfox cycle remove 15
@@ -1612,7 +1712,7 @@ def cycle_remove(
 
 
 async def _remove_cycle(config_path: Path, cycle_id: int, force: bool) -> None:
-    """Delete a cycle by ID (database records + raw output files)."""
+    """Delete cycles from 0..cycle_id (plus dependent child cycles)."""
     import glob as globmod
 
     from .graph.store import KnowledgeGraph
@@ -1623,46 +1723,59 @@ async def _remove_cycle(config_path: Path, cycle_id: int, force: bool) -> None:
     await graph.initialize()
 
     try:
-        if not force:
-            # Try cycle_outputs first for rich info
-            cycle = await graph.get_cycle_output(cycle_id)
-            if cycle:
-                console.print(
-                    f"Cycle [bold]{cycle_id}[/bold]: {cycle['target_claim'][:80]}\n"
-                    f"  Cost: ${cycle['total_cost_usd']:.4f} | "
-                    f"Findings: +{cycle['findings_created']} ~{cycle['findings_updated']} | "
-                    f"Date: {cycle['created_at'][:19]}"
-                )
-            else:
-                # Fall back to nodes table
-                node_cycles = await graph.list_cycles_from_nodes(workspace_id, limit=1000)
-                found = next((c for c in node_cycles if c["cycle_id"] == cycle_id), None)
-                if not found:
-                    console.print(f"[red]Cycle {cycle_id} not found[/red]")
-                    return
-                console.print(
-                    f"Cycle [bold]{cycle_id}[/bold]: {found['node_count']} nodes | "
-                    f"Date: {found['first_created'][:19]}"
-                )
+        root_cycle_ids = await graph.list_existing_cycle_ids(
+            workspace_id=workspace_id,
+            max_cycle_id=cycle_id,
+        )
+        if not root_cycle_ids:
+            console.print(f"[red]No cycles found in range 0..{cycle_id}[/red]")
+            return
 
-            if not typer.confirm("Delete this cycle?"):
+        if not force:
+            console.print(
+                f"Delete [bold]{len(root_cycle_ids)}[/bold] cycles in range "
+                f"[bold]0..{cycle_id}[/bold]."
+            )
+            console.print("[dim]Descendant cycles that depend on these may also be deleted.[/dim]")
+
+            if not typer.confirm("Continue?"):
                 console.print("[yellow]Cancelled[/yellow]")
                 return
 
-        # Delete from database (cycle_outputs, graph_operations, nodes)
-        deleted = await graph.delete_cycle(workspace_id=workspace_id, cycle_id=cycle_id)
+        deleted_cycle_ids: list[int] = []
+        visited_cycle_ids: set[int] = set()
+
+        # Delete oldest roots first so dependency traversal is deterministic.
+        for root_cycle_id in sorted(root_cycle_ids):
+            deleted_cycle_ids.extend(
+                await graph.delete_cycle_recursive(
+                    workspace_id=workspace_id,
+                    cycle_id=root_cycle_id,
+                    visited=visited_cycle_ids,
+                )
+            )
 
         # Delete raw output files: raw/{YYYY-MM-DD}/cycle_{id}.md
         raw_dir = config_path.parent / config.storage.raw_output_dir
-        raw_files = globmod.glob(str(raw_dir / "**" / f"cycle_{cycle_id}.md"), recursive=True)
-        for f in raw_files:
-            Path(f).unlink()
-            console.print(f"[dim]Deleted {f}[/dim]")
+        raw_files: list[str] = []
+        for deleted_cycle_id in deleted_cycle_ids:
+            matches = globmod.glob(
+                str(raw_dir / "**" / f"cycle_{deleted_cycle_id}.md"),
+                recursive=True,
+            )
+            raw_files.extend(matches)
+            for f in matches:
+                Path(f).unlink()
+                console.print(f"[dim]Deleted {f}[/dim]")
 
-        if deleted or raw_files:
-            console.print(f"[green]✓[/green] Deleted cycle {cycle_id}")
+        if deleted_cycle_ids or raw_files:
+            unique_deleted = sorted(set(deleted_cycle_ids))
+            console.print(
+                f"[green]✓[/green] Deleted {len(unique_deleted)} cycle(s): "
+                + ", ".join(str(c) for c in unique_deleted)
+            )
         else:
-            console.print(f"[red]Cycle {cycle_id} not found[/red]")
+            console.print(f"[red]No cycles deleted in range 0..{cycle_id}[/red]")
     finally:
         await graph.close()
 
@@ -1822,6 +1935,17 @@ def _serve_dashboard(
 
     db_path = str(cfg.storage.db_path)
     workspace_id = cfg.multi_tenancy.workspace_id
+
+    # Keep context documents available via DB-backed APIs/UI.
+    try:
+        from .graph.store import KnowledgeGraph
+
+        graph = KnowledgeGraph(db_path, workspace_id=workspace_id)
+        asyncio.run(graph.initialize())
+        asyncio.run(_sync_context_documents_to_db(graph, cfg, config_path))
+        asyncio.run(graph.close())
+    except Exception as e:
+        console.print(f"[yellow]Warning:[/yellow] Failed to sync context documents before serving: {e}")
 
     # Check if database exists
     if not Path(db_path).exists():

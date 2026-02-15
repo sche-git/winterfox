@@ -8,10 +8,12 @@ import { api } from '../../services/api';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import AgentRawOutput from '@/components/ui/AgentRawOutput';
+import MarkdownContent from '@/components/ui/MarkdownContent';
 import { getNodeTypeConfig, parseClaimType } from '@/lib/nodeTypes';
-import type { Node, CycleDetail } from '../../types/api';
+import type { Node, CycleDetail, Config } from '../../types/api';
 import {
   FileText,
   ExternalLink,
@@ -22,6 +24,8 @@ import {
   FlaskConical,
   ChevronDown,
   Bot,
+  Copy,
+  Check,
 } from 'lucide-react';
 
 const NodeDetail: React.FC = () => {
@@ -34,11 +38,19 @@ const NodeDetail: React.FC = () => {
   const [cycleDetail, setCycleDetail] = useState<CycleDetail | null>(null);
   const [cycleLoading, setCycleLoading] = useState(false);
   const [showResearch, setShowResearch] = useState(false);
+  const [showProjectContext, setShowProjectContext] = useState(false);
+  const [projectConfig, setProjectConfig] = useState<Config | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     setCycleDetail(null);
     setShowResearch(false);
   }, [selectedNode?.id]);
+
+  useEffect(() => {
+    if (!selectedNode || selectedNode.parent_id !== null) return;
+    api.getConfig().then(setProjectConfig).catch(() => setProjectConfig(null));
+  }, [selectedNode?.id, selectedNode?.parent_id]);
 
   const loadCycleResearch = useCallback(async (cycleId: number) => {
     if (cycleDetail?.id === cycleId) return;
@@ -127,6 +139,34 @@ const NodeDetail: React.FC = () => {
 
         <p className="text-base leading-relaxed">{parsed.claim}</p>
 
+        <div className="mt-3 flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              navigator.clipboard.writeText(parsed.claim);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1500);
+            }}
+          >
+            {copied ? <Check className="mr-1.5 h-3.5 w-3.5" /> : <Copy className="mr-1.5 h-3.5 w-3.5" />}
+            {copied ? 'Copied' : 'Copy Claim'}
+          </Button>
+          {selectedNode.created_by_cycle > 0 && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setShowResearch(true);
+                loadCycleResearch(selectedNode.created_by_cycle);
+              }}
+            >
+              <FlaskConical className="mr-1.5 h-3.5 w-3.5" />
+              Source Cycle
+            </Button>
+          )}
+        </div>
+
         {typeConfig && (
           <div className="mt-2">
             <Badge variant="outline" className="text-[11px]">
@@ -165,6 +205,63 @@ const NodeDetail: React.FC = () => {
             {selectedNode.status}
           </Badge>
         </div>
+
+        {selectedNode.parent_id === null && projectConfig && (
+          <>
+            <Separator className="my-5" />
+            <Collapsible open={showProjectContext} onOpenChange={setShowProjectContext}>
+              <CollapsibleTrigger className="flex w-full items-center justify-between text-left">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Project Context
+                  </span>
+                  <Badge variant="outline" className="text-[10px] py-0">
+                    {projectConfig.context_documents.length} docs
+                  </Badge>
+                </div>
+                <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${showProjectContext ? 'rotate-180' : ''}`} />
+              </CollapsibleTrigger>
+
+              <CollapsibleContent>
+                <div className="mt-3 space-y-3">
+                  <div className="rounded-md border p-3">
+                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      North Star
+                    </p>
+                    <MarkdownContent content={projectConfig.north_star} />
+                  </div>
+
+                  {projectConfig.search_instructions && (
+                    <div className="rounded-md border p-3">
+                      <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        Search Instructions
+                      </p>
+                      <MarkdownContent content={projectConfig.search_instructions} />
+                    </div>
+                  )}
+
+                  {projectConfig.context_documents.length > 0 && (
+                    <div className="rounded-md border p-3">
+                      <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        Context Documents
+                      </p>
+                      <div className="space-y-2">
+                        {projectConfig.context_documents.map((doc) => (
+                          <div key={doc.filename} className="rounded-md border bg-muted/30 p-2.5">
+                            <p className="text-xs font-medium">{doc.filename}</p>
+                            <div className="mt-1 max-h-56 overflow-auto text-xs">
+                              <MarkdownContent content={doc.content} />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
+          </>
+        )}
 
         {selectedNode.created_by_cycle > 0 && (
           <>
