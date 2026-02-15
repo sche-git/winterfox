@@ -22,6 +22,7 @@ import BubbleMapNode from './BubbleMapNode';
 type BubbleNodeData = {
   id: string;
   claim: string;
+  description: string | null;
   confidence: number;
   importance: number;
   nodeType: string | null;
@@ -121,6 +122,7 @@ const ResearchMapCanvas: React.FC = () => {
           data: {
             id: node.id,
             claim: node.claim,
+            description: node.description,
             confidence: node.confidence,
             importance: node.importance,
             nodeType: node.node_type,

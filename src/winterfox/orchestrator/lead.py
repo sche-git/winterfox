@@ -500,7 +500,10 @@ NOT directions (too granular):
    - Each direction should suggest a path of inquiry
    - For each direction, provide:
      - `claim`: concise one-line summary
-     - `description`: long-form narrative (at least 220 words; target 350-700 words)
+     - `description`: long-form Markdown narrative (at least 220 words; target 350-700 words)
+       - Use Markdown structure with short sections and bullets where helpful
+       - Preserve meaningful line breaks between sections/points
+       - Include concrete items: context, key evidence, assumptions/risks, and next actions
    - Preserve both breadth-oriented and depth-oriented next steps when warranted by evidence
 
 2. **Assess Confidence**:
@@ -533,7 +536,7 @@ Respond with ONLY this JSON structure:
   "directions": [
     {{
       "claim": "Short summary (one line, <=120 chars)",
-      "description": "Detailed one-page narrative (target 350-700 words) covering context, scope, assumptions, evidence, and next actions",
+      "description": "Markdown one-page narrative (target 350-700 words) with sections like ## Context, ## Evidence, ## Risks/Assumptions, ## Next Actions",
       "confidence": 0.85,
       "importance": 0.9,
       "reasoning": "Why this direction matters and what it builds on",

@@ -7,6 +7,7 @@ import remarkGfm from 'remark-gfm';
 type BubbleNodeData = {
   id: string;
   claim: string;
+  description: string | null;
   confidence: number;
   importance: number;
   nodeType: string | null;
@@ -29,8 +30,10 @@ const BubbleMapNode: React.FC<NodeProps<BubbleNodeData>> = ({ data }) => {
   const importancePct = clamp(Math.round(data.importance * 100), 0, 100);
   const confidenceHeight = Math.max(5, (confidencePct / 100) * METRIC_HEIGHT);
   const importanceHeight = Math.max(5, (importancePct / 100) * METRIC_HEIGHT);
-  const label = parsed.claim.length > 170 ? `${parsed.claim.slice(0, 170)}...` : parsed.claim;
-  const containsMarkdown = /[#*_`~\[\]\(\)\-|>]/.test(label);
+  const label = parsed.claim.length > 120 ? `${parsed.claim.slice(0, 120)}...` : parsed.claim;
+  const description = (data.description || '').trim();
+  // Preserve single newlines as markdown line breaks.
+  const markdownDescription = description.replace(/\n/g, '  \n');
 
   return (
     <div className={`relative ${data.dimmed ? 'opacity-30' : 'opacity-100'} max-w-[286px]`}>
@@ -74,28 +77,26 @@ const BubbleMapNode: React.FC<NodeProps<BubbleNodeData>> = ({ data }) => {
             </div>
 
             <div className="min-w-0 flex-1">
-              {containsMarkdown ? (
-                <div className="max-h-[78px] overflow-hidden text-left text-xs leading-snug text-foreground">
+              <p className="line-clamp-1 text-xs font-semibold leading-snug text-foreground">{label}</p>
+              {markdownDescription && (
+                <div className="mt-1 max-h-[84px] overflow-hidden text-left text-[11px] leading-snug text-muted-foreground">
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     components={{
                       p: ({ children }) => <p className="mb-1">{children}</p>,
-                      strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                      strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
                       em: ({ children }) => <em className="italic">{children}</em>,
                       code: ({ children }) => (
-                        <code className="rounded bg-muted px-1 py-0.5 text-[10px]">{children}</code>
+                        <code className="rounded bg-muted px-1 py-0.5 text-[10px] text-foreground">{children}</code>
                       ),
-                      ul: ({ children }) => <ul className="ml-4 list-disc">{children}</ul>,
-                      ol: ({ children }) => <ol className="ml-4 list-decimal">{children}</ol>,
+                      ul: ({ children }) => <ul className="mb-1 ml-4 list-disc">{children}</ul>,
+                      ol: ({ children }) => <ol className="mb-1 ml-4 list-decimal">{children}</ol>,
                     }}
                   >
-                    {label}
+                    {markdownDescription}
                   </ReactMarkdown>
                 </div>
-              ) : (
-                <p className="line-clamp-3 text-xs leading-snug text-foreground">{label}</p>
               )}
-
             </div>
           </div>
         </div>
