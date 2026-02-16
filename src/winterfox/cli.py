@@ -698,9 +698,9 @@ def run(
         help="Number of distinct targets to run in parallel per round",
     ),
     parallel_shortage_policy: str = typer.Option(
-        "fail",
+        "shrink",
         "--parallel-shortage-policy",
-        help="When eligible targets < parallel-targets: fail | shrink | single_fallback",
+        help="When eligible targets < parallel-targets: shrink | fail | single_fallback",
     ),
     focus: Optional[str] = typer.Option(None, "--focus", "-f", help="Specific node ID to research"),
     instruction: Optional[str] = typer.Option(
@@ -768,7 +768,7 @@ async def _run_cycles(
     generate_report: bool = False,
     cycle_instruction: str | None = None,
     parallel_targets: int = 1,
-    parallel_shortage_policy: str = "fail",
+    parallel_shortage_policy: str = "shrink",
 ) -> None:
     """Run research cycles."""
     if not use_consensus:

@@ -42,6 +42,9 @@ type FlattenedItem = {
   parentId: string | null;
 };
 
+type LeafPath = NodeTreeItem[];
+type ViewMode = 'graph' | 'paths';
+
 const nodeTypes: NodeTypes = {
   bubble: BubbleMapNode,
 };
@@ -114,6 +117,31 @@ function buildUpstreamSet(
   return upstream;
 }
 
+function buildLeafPaths(roots: NodeTreeItem[]): LeafPath[] {
+  const rows: LeafPath[] = [];
+
+  const walk = (node: NodeTreeItem, path: NodeTreeItem[]) => {
+    const next = [...path, node];
+    if (node.children.length === 0) {
+      rows.push(next);
+      return;
+    }
+
+    node.children.forEach((child) => walk(child, next));
+  };
+
+  roots.forEach((root) => walk(root, []));
+  return rows;
+}
+
+function getConfidenceColor(confidence: number): string {
+  if (confidence < 0.35) return 'text-red-600';
+  if (confidence < 0.55) return 'text-orange-600';
+  if (confidence < 0.75) return 'text-amber-600';
+  if (confidence < 0.9) return 'text-lime-600';
+  return 'text-green-600';
+}
+
 const ResearchMapCanvas: React.FC = () => {
   const tree = useGraphStore((s) => s.tree);
   const treeLoading = useGraphStore((s) => s.treeLoading);
@@ -122,6 +150,7 @@ const ResearchMapCanvas: React.FC = () => {
   const [query, setQuery] = useState('');
   const [minConfidence, setMinConfidence] = useState(0);
   const [focusMode, setFocusMode] = useState(true);
+  const [viewMode, setViewMode] = useState<ViewMode>('paths');
   const { fitView, setCenter, getZoom } = useReactFlow();
 
   const queryLower = query.trim().toLowerCase();
@@ -195,6 +224,21 @@ const ResearchMapCanvas: React.FC = () => {
     return { nodes, edges };
   }, [tree, selectedNodeId, selectNode, queryLower, minConfidence, focusMode]);
 
+  const leafPathRows = useMemo(() => {
+    const rows = buildLeafPaths(tree).filter((path) => {
+      if (path.length === 0) return false;
+
+      const leaf = path[path.length - 1];
+      if (leaf.confidence < minConfidence / 100) return false;
+
+      if (queryLower.length === 0) return true;
+      return path.some((node) => `${node.claim} ${node.description ?? ''}`.toLowerCase().includes(queryLower));
+    });
+
+    const maxDepth = rows.reduce((max, path) => Math.max(max, path.length), 0);
+    return { rows, maxDepth };
+  }, [tree, minConfidence, queryLower]);
+
   const [nodes, setNodes, onNodesChange] = useNodesState<BubbleNodeData>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
 
@@ -204,12 +248,12 @@ const ResearchMapCanvas: React.FC = () => {
   }, [computed.nodes, computed.edges, setNodes, setEdges]);
 
   useEffect(() => {
-    if (!selectedNodeId || computed.nodes.length === 0) return;
+    if (viewMode !== 'graph' || !selectedNodeId || computed.nodes.length === 0) return;
     const target = computed.nodes.find((n) => n.id === selectedNodeId);
     if (!target) return;
     const zoom = Math.max(getZoom(), 0.72);
     setCenter(target.position.x + 150, target.position.y + 30, { duration: 220, zoom });
-  }, [selectedNodeId, computed.nodes, setCenter, getZoom]);
+  }, [selectedNodeId, computed.nodes, setCenter, getZoom, viewMode]);
 
   if (treeLoading) {
     return (
@@ -224,10 +268,30 @@ const ResearchMapCanvas: React.FC = () => {
       <div className="flex items-center justify-between border-b bg-card px-3 py-2">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Research Map</p>
-          <p className="text-[11px] text-muted-foreground">{nodes.length} nodes</p>
+          <p className="text-[11px] text-muted-foreground">
+            {viewMode === 'graph' ? `${nodes.length} nodes` : `${leafPathRows.rows.length} root→leaf paths`}
+          </p>
         </div>
 
         <div className="flex items-center gap-2">
+          <div className="flex items-center rounded-md border p-0.5">
+            <Button
+              size="sm"
+              variant={viewMode === 'graph' ? 'default' : 'ghost'}
+              onClick={() => setViewMode('graph')}
+              className="h-7 px-2 text-xs"
+            >
+              Map
+            </Button>
+            <Button
+              size="sm"
+              variant={viewMode === 'paths' ? 'default' : 'ghost'}
+              onClick={() => setViewMode('paths')}
+              className="h-7 px-2 text-xs"
+            >
+              Leaf Paths
+            </Button>
+          </div>
           <div className="relative w-56">
             <Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
             <input
@@ -251,40 +315,116 @@ const ResearchMapCanvas: React.FC = () => {
             />
             <span className="w-8 text-right text-[11px] tabular-nums text-muted-foreground">{minConfidence}%</span>
           </div>
-          <Button size="sm" variant={focusMode ? 'default' : 'outline'} onClick={() => setFocusMode((v) => !v)}>
-            Focus
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => fitView({ padding: 0.22, duration: 250 })}>
-            Fit
-          </Button>
+          {viewMode === 'graph' && (
+            <>
+              <Button size="sm" variant={focusMode ? 'default' : 'outline'} onClick={() => setFocusMode((v) => !v)}>
+                Focus
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => fitView({ padding: 0.22, duration: 250 })}>
+                Fit
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
-      <div className="h-[calc(100%-57px)]">
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          nodeTypes={nodeTypes}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          fitView
-          fitViewOptions={{ padding: 0.22 }}
-          minZoom={0.3}
-          maxZoom={1.6}
-          nodesDraggable={false}
-          elementsSelectable
-          proOptions={{ hideAttribution: true }}
-        >
-          <Background color="#e2e8f0" gap={24} size={1} />
-          <MiniMap
-            pannable
-            zoomable
-            nodeColor={(n) => (n.id === selectedNodeId ? '#06b6d4' : '#94a3b8')}
-            nodeStrokeWidth={2}
-          />
-          <Controls showInteractive={false} />
-        </ReactFlow>
-      </div>
+      {viewMode === 'graph' ? (
+        <div className="h-[calc(100%-57px)]">
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={nodeTypes}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            fitView
+            fitViewOptions={{ padding: 0.22 }}
+            minZoom={0.3}
+            maxZoom={1.6}
+            nodesDraggable={false}
+            elementsSelectable
+            proOptions={{ hideAttribution: true }}
+          >
+            <Background color="#e2e8f0" gap={24} size={1} />
+            <MiniMap
+              pannable
+              zoomable
+              nodeColor={(n) => (n.id === selectedNodeId ? '#06b6d4' : '#94a3b8')}
+              nodeStrokeWidth={2}
+            />
+            <Controls showInteractive={false} />
+          </ReactFlow>
+        </div>
+      ) : (
+        <div className="h-[calc(100%-57px)] overflow-auto">
+          {leafPathRows.rows.length === 0 ? (
+            <div className="flex h-full items-center justify-center p-6">
+              <p className="text-sm text-muted-foreground">No root-to-leaf paths match the current filters.</p>
+            </div>
+          ) : (
+            <div className="min-w-[900px] p-3">
+              <div
+                className="grid gap-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
+                style={{ gridTemplateColumns: `40px repeat(${leafPathRows.maxDepth}, minmax(220px, 1fr))` }}
+              >
+                <div className="px-1">#</div>
+                {Array.from({ length: leafPathRows.maxDepth }).map((_, idx) => (
+                  <div key={idx} className="px-1">
+                    Depth {idx}
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-2 space-y-2">
+                {leafPathRows.rows.map((path, rowIdx) => (
+                  <div
+                    key={path.map((node) => node.id).join('-')}
+                    className="grid items-stretch gap-2"
+                    style={{ gridTemplateColumns: `40px repeat(${leafPathRows.maxDepth}, minmax(220px, 1fr))` }}
+                  >
+                    <div className="flex items-center justify-center rounded-md border bg-card text-xs tabular-nums text-muted-foreground">
+                      {rowIdx + 1}
+                    </div>
+                    {Array.from({ length: leafPathRows.maxDepth }).map((_, colIdx) => {
+                      const node = path[colIdx];
+                      if (!node) {
+                        return <div key={colIdx} className="rounded-md border border-dashed bg-muted/30" />;
+                      }
+
+                      const isSelected = selectedNodeId === node.id;
+                      const isInSelectedPath = selectedNodeId ? path.some((item) => item.id === selectedNodeId) : false;
+
+                      return (
+                        <button
+                          key={node.id}
+                          onClick={() => selectNode(node.id)}
+                          className={`relative rounded-md border p-2 text-left transition-colors hover:bg-muted/50 ${
+                            isSelected
+                              ? 'border-cyan-500 bg-cyan-500/10'
+                              : isInSelectedPath
+                                ? 'border-slate-400 bg-slate-100/60'
+                                : 'bg-card'
+                          }`}
+                          title={node.claim}
+                        >
+                          <p className="line-clamp-2 text-sm leading-snug">{node.claim}</p>
+                          <div className="mt-1 flex items-center justify-between gap-2">
+                            <span className={`text-[11px] font-semibold ${getConfidenceColor(node.confidence)}`}>
+                              {(node.confidence * 100).toFixed(0)}%
+                            </span>
+                            {colIdx < path.length - 1 && (
+                              <span className="text-[11px] font-semibold text-muted-foreground">→</span>
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };

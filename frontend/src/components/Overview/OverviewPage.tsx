@@ -8,6 +8,7 @@ import { useCycleStore } from '../../stores/cycleStore';
 import { useUIStore } from '../../stores/uiStore';
 import { api } from '../../services/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import MarkdownContent from '@/components/ui/MarkdownContent';
 import {
   CheckCircle2,
   XCircle,
@@ -201,7 +202,10 @@ const OverviewPage: React.FC = () => {
                     className="flex w-full items-start gap-3 py-2.5 text-left transition-colors hover:bg-muted/50 -mx-2 px-2 rounded"
                   >
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm leading-snug line-clamp-2">{node.claim}</p>
+                      <MarkdownContent
+                        content={node.claim}
+                        className="text-sm leading-snug [&_p]:mb-0"
+                      />
                       <div className="mt-1 flex items-center gap-2">
                         <span className="text-xs tabular-nums text-muted-foreground">
                           {(node.confidence * 100).toFixed(0)}% confidence

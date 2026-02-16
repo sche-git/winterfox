@@ -65,9 +65,36 @@ async def merge_directions_into_graph(
     for direction in directions:
         logger.debug(f"Processing direction: {direction.claim[:60]}...")
 
-        # Search for similar existing directions (no type filtering)
+        # Determine parent and depth based on relationship type
+        if direction.relationship_type == "alternative_approach":
+            # Make this a SIBLING of the target, not a child
+            # Siblings share the same parent and same depth
+            if target_node.parent_id is None:
+                # Target is root - alternatives become top-level siblings
+                actual_parent_id = None
+                actual_depth = target_node.depth
+            else:
+                # Target has a parent - alternatives become siblings under that parent
+                actual_parent_id = target_node.parent_id
+                actual_depth = target_node.depth
+
+            logger.info(
+                f"Direction '{direction.claim[:60]}...' marked as alternative_approach, "
+                f"creating as sibling at depth {actual_depth}"
+            )
+        else:
+            # Default: extends_parent - becomes child at depth+1
+            actual_parent_id = target_node_id
+            actual_depth = target_node.depth + 1
+
+            logger.debug(
+                f"Direction '{direction.claim[:60]}...' extends parent, "
+                f"creating as child at depth {actual_depth}"
+            )
+
+        # Search for similar existing directions under the actual parent (not always target)
         existing_nodes = await _find_similar_directions(
-            graph, direction.claim, target_node_id, similarity_threshold
+            graph, direction.claim, actual_parent_id, similarity_threshold
         )
 
         if existing_nodes:
@@ -148,14 +175,26 @@ async def merge_directions_into_graph(
             # Create new direction
             from ..graph.models import Evidence
 
-            # Convert evidence summary to Evidence object
-            evidence_list = [
-                Evidence(
-                    text=direction.evidence_summary,
-                    source=f"lead_llm_synthesis_cycle_{cycle_id}",
-                    verified_by=[f"lead_llm_cycle_{cycle_id}"],
+            # Convert evidence summary to Evidence object (if present)
+            # Note: evidence_summary is deprecated in Phase 1 simplifications
+            evidence_list = []
+            if direction.evidence_summary:
+                evidence_list.append(
+                    Evidence(
+                        text=direction.evidence_summary,
+                        source=f"lead_llm_synthesis_cycle_{cycle_id}",
+                        verified_by=[f"lead_llm_cycle_{cycle_id}"],
+                    )
                 )
-            ]
+            else:
+                # For simplified format: create generic evidence entry from cycle
+                evidence_list.append(
+                    Evidence(
+                        text=f"Synthesized from research cycle {cycle_id}. See direction description for details.",
+                        source=f"lead_llm_synthesis_cycle_{cycle_id}",
+                        verified_by=[f"lead_llm_cycle_{cycle_id}"],
+                    )
+                )
 
             # Apply confidence discount (first-time directions are less certain)
             initial_confidence = direction.confidence * confidence_discount
@@ -164,10 +203,10 @@ async def merge_directions_into_graph(
             new_node = await graph.add_node(
                 claim=direction.claim,
                 description=direction.description or None,
-                parent_id=target_node_id,
+                parent_id=actual_parent_id,
                 confidence=initial_confidence,
                 importance=direction.importance,
-                depth=target_depth + 1,  # Structural graph depth (child depth = parent + 1)
+                depth=actual_depth,  # Use computed depth based on relationship type
                 created_by_cycle=cycle_id,
                 evidence=evidence_list,
                 tags=direction.tags or [],
@@ -191,6 +230,12 @@ async def merge_directions_into_graph(
         f"Merge complete: {stats['created']} created, {stats['updated']} updated, "
         f"{stats['skipped']} skipped"
     )
+
+    # Add relationship breakdown stats
+    stats["relationship_breakdown"] = {
+        "extended_parent": sum(1 for d in directions if d.relationship_type == "extends_parent"),
+        "alternative_approaches": sum(1 for d in directions if d.relationship_type == "alternative_approach"),
+    }
 
     return stats
 

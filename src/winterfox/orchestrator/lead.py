@@ -13,9 +13,11 @@ that makes all strategic decisions autonomously.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 if TYPE_CHECKING:
     from ..agents.protocol import AgentAdapter, AgentOutput
@@ -42,6 +44,63 @@ def _render_cycle_instruction(cycle_instruction: str | None) -> str:
     )
 
 
+def _compact_text(text: str | None, max_chars: int = 220) -> str:
+    """Normalize and truncate text for compact prompt context."""
+    if not text:
+        return ""
+    normalized = " ".join(text.strip().split())
+    if len(normalized) <= max_chars:
+        return normalized
+    return normalized[:max_chars] + "..."
+
+
+def _extract_markdown_section(text: str | None, heading: str) -> str:
+    """Extract markdown section body by heading (e.g. 'Next Actions')."""
+    if not text:
+        return ""
+
+    lines = text.splitlines()
+    target = heading.strip().lower()
+    in_section = False
+    collected: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        lower = stripped.lower()
+
+        if lower.startswith("## "):
+            current_heading = lower[3:].strip()
+            if in_section:
+                break
+            if current_heading == target:
+                in_section = True
+            continue
+
+        if in_section:
+            collected.append(line)
+
+    return "\n".join(collected).strip()
+
+
+def _extract_next_actions(description: str | None, max_items: int = 3) -> list[str]:
+    """Extract bullet items from a node description 'Next Actions' section."""
+    section = _extract_markdown_section(description, "Next Actions")
+    if not section:
+        return []
+
+    actions: list[str] = []
+    for line in section.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("- ", "* ")):
+            item = stripped[2:].strip()
+            if item:
+                actions.append(_compact_text(item, max_chars=140))
+        if len(actions) >= max_items:
+            break
+
+    return actions
+
+
 @dataclass
 class Direction:
     """
@@ -53,10 +112,12 @@ class Direction:
     confidence: float  # 0.0 to 1.0
     importance: float  # 0.0 to 1.0
     reasoning: str  # Why this direction matters
-    evidence_summary: str  # Brief summary of supporting evidence
-    description: str  # Detailed one-page narrative for users/UI
+    description: str  # Detailed narrative for users/UI (simplified: Proposal + Next Actions)
     stance: str = "mixed"  # support|mixed|disconfirm evidence alignment for this direction claim
     direction_outcome: str = "pursue"  # pursue|complete lifecycle recommendation for this direction
+    relationship_type: str = "extends_parent"  # extends_parent|alternative_approach - relationship to target direction
+    # Optional fields (not required in simplified output format):
+    evidence_summary: str | None = None  # Deprecated - folded into description
     tags: list[str] | None = None
 
 
@@ -64,9 +125,10 @@ class Direction:
 class DirectionSynthesis:
     """Result of Lead LLM synthesizing research into directions."""
     directions: list[Direction]
-    synthesis_reasoning: str
-    consensus_directions: list[str]  # Directions all agents agreed on
-    contradictions: list[str]  # Where agents disagreed
+    synthesis_reasoning: str  # Now includes consensus/contradictions info
+    # Optional fields (deprecated - info folded into synthesis_reasoning):
+    consensus_directions: list[str] | None = None
+    contradictions: list[str] | None = None
 
 
 @dataclass
@@ -125,6 +187,383 @@ class LeadLLM:
         self.report_content = report_content
         logger.info(f"Initialized Lead LLM: {adapter.name}")
 
+    def _build_selection_brief(self, node: "KnowledgeNode", detailed: bool = False) -> str:
+        """Build a compact, structured context brief for selection prompts."""
+        claim_preview = _compact_text(node.claim, max_chars=140 if detailed else 110)
+        context_preview = _compact_text(node.description, max_chars=360 if detailed else 180)
+        next_actions = _extract_next_actions(node.description, max_items=4 if detailed else 2)
+        actions_preview = "; ".join(next_actions) if next_actions else "none captured"
+        return (
+            f"- ID: {node.id[:8]}\n"
+            f"  Summary: {claim_preview}\n"
+            f"  Context: {context_preview or 'none'}\n"
+            f"  Next Actions: {actions_preview}\n"
+            f"  Metrics: conf={node.confidence:.2f} imp={node.importance:.2f} depth={node.depth} "
+            f"stale={node.staleness_hours:.1f}h children={len(node.children_ids)} status={node.status}"
+        )
+
+    def _build_direction_reference_brief(self, node: "KnowledgeNode") -> str:
+        """Build compact reference line for duplicate-avoidance context in synthesis."""
+        return (
+            f"- {node.id[:8]} | {_compact_text(node.claim, max_chars=140)} | "
+            f"conf={node.confidence:.2f} imp={node.importance:.2f} depth={node.depth} status={node.status}"
+        )
+
+    async def _build_ancestry_chain(self, node: "KnowledgeNode") -> str:
+        """Build full path from root to this node showing depth progression."""
+        path = []
+        current = node
+        while current:
+            path.insert(0, f"Depth {current.depth}: {_compact_text(current.claim, max_chars=100)}")
+            if not current.parent_id:
+                break
+            current = await self.graph.get_node(current.parent_id)
+
+        if len(path) <= 1:
+            return path[0] if path else "Root"
+
+        return "\n  └─ ".join(path)
+
+    async def _build_synthesis_graph_context(self, target_node: "KnowledgeNode") -> str:
+        """
+        Build nearby-graph context for synthesis duplicate avoidance.
+
+        Includes:
+        - Existing children of target node (what already exists under this branch)
+        - Peer branches under target's parent (sibling directions at current level)
+        """
+        existing_children = await self.graph.get_children(target_node.id)
+        existing_children_lines = (
+            [self._build_direction_reference_brief(node) for node in existing_children]
+            if existing_children
+            else ["- none"]
+        )
+
+        sibling_lines: list[str] = ["- none"]
+        if target_node.parent_id:
+            parent_children = await self.graph.get_children(target_node.parent_id)
+            siblings = [node for node in parent_children if node.id != target_node.id]
+            if siblings:
+                sibling_lines = [self._build_direction_reference_brief(node) for node in siblings]
+
+        return (
+            "## Existing Child Directions Under Target\n\n"
+            + "\n".join(existing_children_lines)
+            + "\n\n## Sibling Directions In Parent Branch\n\n"
+            + "\n".join(sibling_lines)
+        )
+
+    def _build_report_section(self) -> str:
+        """Render optional report context section for selection prompts."""
+        if not self.report_content:
+            return ""
+        report_preview = (
+            self.report_content[:2000] + "\n\n[Report truncated...]"
+            if len(self.report_content) > 2000
+            else self.report_content
+        )
+        return f"\n## Current Research Report\n\n{report_preview}\n"
+
+    async def _build_last_selected_section(self, last_selected_id: str | None) -> str:
+        """Render optional last-selected node section for selection prompts."""
+        if not last_selected_id:
+            return ""
+        last_node = await self.graph.get_node(last_selected_id)
+        if not last_node:
+            return ""
+        return (
+            "\n## Last Selected Direction\n\n"
+            f"{self._build_selection_brief(last_node, detailed=False)}\n\n"
+            "Consider whether to continue this branch or pivot.\n"
+        )
+
+    def _build_excluded_section(self, excluded_node_ids: set[str]) -> str:
+        """Render excluded-node section for selection prompts."""
+        if not excluded_node_ids:
+            return ""
+        excluded_list = "\n".join(f"- {node_id}" for node_id in sorted(excluded_node_ids)[:50])
+        return (
+            "\n## Excluded Directions (Do Not Select)\n\n"
+            f"{excluded_list}\n"
+        )
+
+    @staticmethod
+    def _resolve_candidate(
+        node_id: str,
+        candidate_nodes: Sequence["KnowledgeNode"],
+        candidate_lookup: dict[str, "KnowledgeNode"],
+    ) -> "KnowledgeNode" | None:
+        """Resolve full or prefix node IDs to a candidate node."""
+        direct = candidate_lookup.get(node_id)
+        if direct:
+            return direct
+        for node in candidate_nodes:
+            if node.id.startswith(node_id):
+                return node
+        return None
+
+    @staticmethod
+    def _extract_json_payload(raw_text: str, required_key: str) -> dict | None:
+        """Extract and parse a JSON object that contains a required key."""
+        match = re.search(rf"\{{.*\"{re.escape(required_key)}\".*\}}", raw_text, re.DOTALL)
+        if not match:
+            return None
+        try:
+            parsed = json.loads(match.group())
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def _build_shortlist_system_prompt(self, cycle_instruction_section: str) -> str:
+        """Build stage-1 shortlist system prompt."""
+        return f"""You are the Lead LLM orchestrating an autonomous research project:
+
+{self.north_star}
+
+Your role is to shortlist the most strategically promising directions to work on next.
+
+## Selection Priority (Ranked - Follow This Order)
+
+1. **User steering instruction first** (if present in cycle override)
+2. **DEPTH over breadth**: Favor nodes that will produce the DEEPEST/most concrete next level
+   - Prioritize nodes at depth 3-4 that can go to 4-5+ (toward execution specifics)
+   - **STRONGLY deprioritize nodes with 5+ children** (breadth explosion alert!)
+   - **Avoid nodes with 8+ children** unless absolutely necessary
+   - Prefer continuing narrow branches over widening broad branches
+3. **Decision-useful progress**: Which node will most improve GO/NO-GO decision clarity when researched?
+4. **Confidence gaps**: Lower confidence nodes need validation (but only if also high importance)
+
+## Strategic Considerations
+
+- **Concreteness ladder goal**: Reach execution-ready specifics (named people, concrete validation steps)
+- Use confidence/importance/staleness as soft signals, not deterministic rules
+- Avoid selecting near-identical directions as separate threads
+{cycle_instruction_section}
+
+## Output Format
+
+Respond with ONLY this JSON structure:
+{{
+  "top_candidate_ids": ["abc123...", "def456...", "ghi789..."],
+  "reasoning": "2-4 sentences explaining why these candidates maximize depth progression"
+}}
+"""
+
+    def _build_shortlist_user_prompt(
+        self,
+        graph_summary: str,
+        all_node_briefs: str,
+        report_section: str,
+        last_selected_section: str,
+        excluded_section: str,
+    ) -> str:
+        """Build stage-1 shortlist user prompt."""
+        return f"""## Graph State
+
+{graph_summary}
+
+## All Active Direction Briefs
+
+{all_node_briefs}
+{report_section}{last_selected_section}{excluded_section}
+---
+
+Shortlist the best candidate directions for the next cycle.
+Return 3-6 candidates unless there are fewer eligible nodes.
+
+Respond with ONLY the JSON structure specified.
+"""
+
+    def _build_final_system_prompt(self, cycle_instruction_section: str) -> str:
+        """Build stage-2 final selection system prompt."""
+        return f"""You are the Lead LLM orchestrating an autonomous research project:
+
+{self.north_star}
+
+Select ONE direction to pursue next from the shortlist.
+
+## Decision Principles (Ranked Priority)
+
+1. **Honor cycle override instruction first** (if present)
+2. **Maximize depth progression**: Choose the node that will produce the most concrete next level
+   - Prefer nodes at higher depth (3-4) over shallow nodes (0-1)
+   - **STRONGLY prefer nodes with fewer children** (1-4 children is ideal)
+   - **Avoid nodes with 5+ children** (breadth explosion - select their children instead)
+   - Favor continuing a narrow branch over widening a broad one
+3. **Decision impact**: Choose the node that maximizes GO/NO-GO clarity for the mission
+4. **Avoid duplicates**: Don't select overlapping directions
+5. **Use metrics as signals only**: confidence/importance/staleness inform but don't dictate
+{cycle_instruction_section}
+
+## Output Format
+
+Respond with ONLY this JSON structure:
+{{
+  "selected_node_id": "abc123...",
+  "reasoning": "2-3 sentences explaining why this choice maximizes depth progression and decision clarity"
+}}
+"""
+
+    def _build_final_user_prompt(
+        self,
+        graph_summary: str,
+        shortlisted_nodes: Sequence["KnowledgeNode"],
+        shortlist_reasoning: str,
+        report_section: str,
+        last_selected_section: str,
+        excluded_section: str,
+    ) -> str:
+        """Build stage-2 final selection user prompt."""
+        shortlist_briefs = "\n\n".join(
+            self._build_selection_brief(node, detailed=True) for node in shortlisted_nodes
+        )
+        shortlist_ids = ", ".join(node.id[:8] for node in shortlisted_nodes)
+        return f"""## Graph State
+
+{graph_summary}
+
+## Shortlist IDs
+
+{shortlist_ids}
+
+## Shortlist Direction Briefs
+
+{shortlist_briefs}
+
+## Shortlist Rationale From Stage 1
+
+{shortlist_reasoning}
+{report_section}{last_selected_section}{excluded_section}
+---
+
+Select the best next direction from the shortlist.
+Respond with ONLY the JSON structure specified.
+"""
+
+    def _parse_shortlist_response(
+        self,
+        raw_text: str,
+        candidate_nodes: Sequence["KnowledgeNode"],
+        candidate_lookup: dict[str, "KnowledgeNode"],
+        excluded_node_ids: set[str],
+    ) -> tuple["KnowledgeNode" | None, str, list["KnowledgeNode"], str]:
+        """
+        Parse stage-1 response.
+
+        Returns:
+            (direct_selected, direct_reasoning, shortlisted_nodes, shortlist_reasoning)
+        """
+        fallback_reasoning = "Fallback shortlist (parse failed)"
+        raw_text = raw_text.strip()
+
+        # Compatibility path: single-stage format from older prompts/tests.
+        any_payload = self._extract_json_payload(raw_text, required_key="selected_node_id")
+        if any_payload:
+            selected_id = str(any_payload.get("selected_node_id", "")).strip()
+            reasoning = str(any_payload.get("reasoning", "")).strip() or (
+                "Lead selected direction in single-stage mode"
+            )
+            selected = self._resolve_candidate(selected_id, candidate_nodes, candidate_lookup)
+            if selected and selected.id not in excluded_node_ids:
+                return selected, reasoning, [], fallback_reasoning
+
+        shortlist_payload = self._extract_json_payload(raw_text, required_key="top_candidate_ids")
+        if not shortlist_payload:
+            logger.warning("Failed to parse shortlist response: response not in expected JSON format")
+            logger.warning(f"Raw shortlist response: {raw_text[:300]}")
+            return None, "", [], fallback_reasoning
+
+        shortlist_reasoning = str(shortlist_payload.get("reasoning", "")).strip() or fallback_reasoning
+        top_ids = shortlist_payload.get("top_candidate_ids", [])
+        if not isinstance(top_ids, list):
+            top_ids = []
+
+        shortlisted_nodes: list[KnowledgeNode] = []
+        seen_ids: set[str] = set()
+        for raw_id in top_ids:
+            if not isinstance(raw_id, str):
+                continue
+            resolved = self._resolve_candidate(raw_id.strip(), candidate_nodes, candidate_lookup)
+            if not resolved or resolved.id in seen_ids:
+                continue
+            seen_ids.add(resolved.id)
+            shortlisted_nodes.append(resolved)
+            if len(shortlisted_nodes) >= 6:
+                break
+
+        return None, "", shortlisted_nodes, shortlist_reasoning
+
+    def _parse_final_selection_response(
+        self,
+        raw_text: str,
+        candidate_nodes: Sequence["KnowledgeNode"],
+        candidate_lookup: dict[str, "KnowledgeNode"],
+        excluded_node_ids: set[str],
+        fallback_node: "KnowledgeNode",
+    ) -> tuple["KnowledgeNode", str]:
+        """Parse stage-2 final response with robust fallbacks."""
+        payload = self._extract_json_payload(raw_text.strip(), required_key="selected_node_id")
+        if not payload:
+            logger.warning(f"Lead LLM final response not in JSON format: {raw_text[:200]}")
+            return fallback_node, "Fallback selection (final response parse failed)"
+
+        selected_id = str(payload.get("selected_node_id", "")).strip()
+        reasoning = str(payload.get("reasoning", "")).strip()
+        target = self._resolve_candidate(selected_id, candidate_nodes, candidate_lookup)
+
+        if not target:
+            logger.warning(f"Lead LLM selected invalid node ID: {selected_id}")
+            return fallback_node, f"Fallback selection (invalid ID: {selected_id})"
+
+        if target.id in excluded_node_ids:
+            logger.warning(f"Lead LLM selected excluded node ID: {selected_id}")
+            return fallback_node, f"Fallback selection (excluded ID: {selected_id})"
+
+        return target, reasoning
+
+    def _programmatic_prefilter(
+        self,
+        nodes: list["KnowledgeNode"],
+        max_candidates: int = 12,
+    ) -> list["KnowledgeNode"]:
+        """
+        Programmatically pre-filter nodes to reduce LLM burden (Phase 1 simplification).
+
+        Scoring heuristic:
+        - Depth value: Higher depth = higher priority (reach execution specifics)
+        - Child count penalty: More children = lower priority (avoid breadth)
+        - Confidence gap: Lower confidence = higher priority (resolve uncertainty)
+        - Importance multiplier: Higher importance = higher priority
+        """
+        def score_node(node: "KnowledgeNode") -> float:
+            # Depth value (prefer deeper nodes 2-4)
+            depth_score = min(node.depth / 5.0, 1.0) * 0.35
+
+            # Child count penalty (prefer nodes with fewer children)
+            child_count = len(node.children_ids) if node.children_ids else 0
+            if child_count >= 8:
+                child_penalty = 0.0  # Avoid breadth explosion
+            elif child_count >= 5:
+                child_penalty = 0.3
+            else:
+                child_penalty = 1.0
+            child_score = child_penalty * 0.30
+
+            # Confidence gap (prefer lower confidence for validation)
+            confidence_gap = (1.0 - node.confidence) * 0.20
+
+            # Importance multiplier
+            importance_score = node.importance * 0.15
+
+            return depth_score + child_score + confidence_gap + importance_score
+
+        # Score and sort
+        scored_nodes = [(node, score_node(node)) for node in nodes]
+        scored_nodes.sort(key=lambda x: x[1], reverse=True)
+
+        # Return top candidates
+        return [node for node, score in scored_nodes[:max_candidates]]
+
     async def select_direction(
         self,
         last_selected_id: str | None = None,
@@ -149,15 +588,12 @@ class LeadLLM:
         Returns:
             (target_node, selection_reasoning) tuple
         """
-        from ..graph.views import render_summary_view, render_weakest_nodes
+        from ..graph.views import render_summary_view
 
         logger.info("Lead LLM selecting direction...")
 
-        # Build context for selection decision
-        graph_summary = await render_summary_view(self.graph, max_depth=2, max_nodes=50)
-        weakest_nodes = await render_weakest_nodes(self.graph, n=10)
-
-        # Get all nodes for Lead to choose from
+        # Build shared context
+        graph_summary = await render_summary_view(self.graph, max_depth=3, max_nodes=80)
         all_nodes = await self.graph.get_all_active_nodes()
         excluded = excluded_node_ids or set()
         candidate_nodes = [node for node in all_nodes if node.id not in excluded]
@@ -167,173 +603,46 @@ class LeadLLM:
         if not candidate_nodes:
             raise ValueError("No eligible active nodes remain after exclusions")
 
-        # Format node options for Lead LLM
-        node_options = []
-        for node in candidate_nodes[:30]:  # Limit to 30 most relevant
-            claim_preview = node.claim[:100] + "..." if len(node.claim) > 100 else node.claim
-            node_options.append(
-                f"- **{node.id[:8]}**: {claim_preview}\n"
-                f"  Conf: {node.confidence:.2f} | Imp: {node.importance:.2f} | "
-                f"Depth: {node.depth} | Stale: {node.staleness_hours:.1f}h | "
-                f"Children: {len(node.children_ids)}"
-            )
-
-        node_list = "\n".join(node_options)
         cycle_instruction_section = _render_cycle_instruction(cycle_instruction)
+        report_section = self._build_report_section()
+        last_selected_section = await self._build_last_selected_section(last_selected_id)
+        excluded_section = self._build_excluded_section(excluded)
 
-        # Build selection prompt
-        system_prompt = f"""You are the Lead LLM orchestrating an autonomous research project:
+        # Phase 1 simplification: Programmatic pre-filter to reduce LLM burden
+        logger.info(f"Programmatically pre-filtering {len(candidate_nodes)} candidates...")
+        top_candidates = self._programmatic_prefilter(candidate_nodes, max_candidates=12)
+        logger.info(f"Pre-filtered to top {len(top_candidates)} candidates for LLM review")
 
-{self.north_star}
+        # Build briefs only for top candidates (more efficient)
+        candidate_briefs = "\n\n".join(
+            self._build_selection_brief(node, detailed=True) for node in top_candidates
+        )
+        candidate_lookup: dict[str, KnowledgeNode] = {node.id: node for node in top_candidates}
 
-Your role is to strategically select which direction to pursue next in the knowledge graph.
-You have maximum autonomy - analyze the current state and make the best strategic decision.
-
-## Priority Order
-
-1. **Honor user steering first**:
-   - If a cycle override instruction is present, align selection to that intent.
-2. **Maintain balanced progress**:
-   - Avoid tunnel vision on a single branch when credible alternatives remain unexplored.
-3. **Maximize useful learning**:
-   - Prefer choices that reduce key uncertainty and improve decision quality.
-
-## Strategic Considerations
-
-1. **Exploration vs Exploitation Balance**
-   - Explore: Pursue directions with low depth and few children (breadth)
-   - Exploit: Deepen directions with low confidence but high importance (depth)
-   - Keep a healthy portfolio across cycles instead of repeatedly selecting the same local area
-
-2. **Confidence Gaps**
-   - Prioritize directions with low confidence (<0.6) if they're important
-   - Don't neglect high-confidence directions that might need challenging
-
-3. **Staleness**
-   - Consider refreshing stale directions (>72 hours)
-   - Balance with pursuing new directions
-
-4. **Research Momentum**
-   - Build on recent progress where appropriate
-   - Don't get stuck in local minima or repetitive deep dives
-
-5. **Strategic Value**
-   - Importance score reflects strategic relevance to mission
-   - High importance, low confidence = high priority
-
-6. **Concreteness Progression (Depth-Aware)**
-   - Treat graph depth as a concreteness ladder:
-     - Depth 0: strategic thesis
-     - Depth 1: wedge + segment
-     - Depth 2: buyer/workflow + measurable pain
-     - Depth 3+: concrete targets (named companies/accounts), procurement path, integration/feasibility specifics
-   - If the graph already has many sibling branches, prefer selecting leaf/near-leaf nodes to refine concreteness
-   - Avoid repeatedly selecting high-level nodes when deeper unresolved nodes exist in that branch
-{cycle_instruction_section}
-
-## Output Format
-
-Respond with ONLY this JSON structure:
-{{
-  "selected_node_id": "abc123...",
-  "reasoning": "2-3 sentences explaining why this direction is the best strategic choice right now"
-}}
-"""
-
-        # Add report context if available
-        report_section = ""
-        if self.report_content:
-            report_preview = self.report_content[:2000] + "\n\n[Report truncated...]" if len(self.report_content) > 2000 else self.report_content
-            report_section = f"\n## Current Research Report\n\n{report_preview}\n"
-
-        # Add last selected context if available
-        last_selected_section = ""
-        if last_selected_id:
-            last_node = await self.graph.get_node(last_selected_id)
-            if last_node:
-                last_selected_section = f"\n## Last Selected Direction\n\n**{last_node.claim[:100]}**\n(ID: {last_selected_id})\n\nConsider whether to continue building on this or pivot to a different direction.\n"
-
-        excluded_section = ""
-        if excluded:
-            excluded_list = "\n".join(f"- {node_id}" for node_id in sorted(excluded)[:30])
-            excluded_section = (
-                "\n## Excluded Directions (Do Not Select)\n\n"
-                f"{excluded_list}\n"
-            )
-
-        user_prompt = f"""## Graph State
-
-{graph_summary}
-
-## Priority Directions
-
-{weakest_nodes}
-
-## All Available Directions
-
-{node_list}
-{report_section}{last_selected_section}{excluded_section}
----
-
-Analyze the graph state and select the best direction to pursue next.
-Consider exploration/exploitation balance, confidence gaps, staleness, and strategic value.
-
-Respond with ONLY the JSON structure specified (no markdown, no explanation outside JSON).
-"""
-
-        # Call Lead LLM for selection
+        # Single-stage selection: Pick ONE from pre-filtered candidates
         output = await self.adapter.run(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            tools=[],  # No tools, pure strategic reasoning
+            system_prompt=self._build_final_system_prompt(cycle_instruction_section),
+            user_prompt=self._build_final_user_prompt(
+                graph_summary=graph_summary,
+                shortlisted_nodes=top_candidates,
+                shortlist_reasoning="Programmatically pre-filtered based on depth, child count, confidence gap, and importance",
+                report_section=report_section,
+                last_selected_section=last_selected_section,
+                excluded_section=excluded_section,
+            ),
+            tools=[],
             max_iterations=1,
         )
 
-        # Parse JSON response
-        import json
-        import re
-
-        # Extract JSON from response (handle markdown code blocks)
-        raw_text = output.raw_text.strip()
-        json_match = re.search(r'\{[^{}]*"selected_node_id"[^{}]*\}', raw_text, re.DOTALL)
-
-        if not json_match:
-            logger.warning(f"Lead LLM response not in JSON format: {raw_text[:200]}")
-            # Fallback to first node
-            logger.warning("Falling back to first available node")
-            return candidate_nodes[0], "Fallback selection (Lead LLM response parse failed)"
-
-        try:
-            selection_data = json.loads(json_match.group())
-            selected_id = selection_data["selected_node_id"]
-            reasoning = selection_data["reasoning"]
-
-            # Find the node
-            target = await self.graph.get_node(selected_id)
-
-            if not target:
-                # Try partial match (Lead might have shortened the ID)
-                for node in all_nodes:
-                    if node.id.startswith(selected_id):
-                        target = node
-                        break
-
-            if not target:
-                logger.warning(f"Lead LLM selected invalid node ID: {selected_id}")
-                logger.warning("Falling back to first available node")
-                return candidate_nodes[0], f"Fallback selection (invalid ID: {selected_id})"
-            if target.id in excluded:
-                logger.warning(f"Lead LLM selected excluded node ID: {selected_id}")
-                logger.warning("Falling back to first non-excluded node")
-                return candidate_nodes[0], f"Fallback selection (excluded ID: {selected_id})"
-
-            logger.info(f"Lead LLM selected: {target.claim[:50]}... (Reason: {reasoning[:100]}...)")
-            return target, reasoning
-
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"Failed to parse Lead LLM selection: {e}")
-            logger.warning(f"Raw response: {raw_text[:200]}")
-            return candidate_nodes[0], f"Fallback selection (parse error: {e})"
+        target, reasoning = self._parse_final_selection_response(
+            raw_text=output.raw_text,
+            candidate_nodes=top_candidates,
+            candidate_lookup=candidate_lookup,
+            excluded_node_ids=excluded,
+            fallback_node=top_candidates[0],  # Fallback to top-scored node
+        )
+        logger.info(f"Lead LLM selected: {target.claim[:50]}... (Reason: {reasoning[:100]}...)")
+        return target, reasoning
 
     async def dispatch_research(
         self,
@@ -483,14 +792,186 @@ Begin your research. Remember: your raw output will be analyzed by the Lead LLM 
 
         combined_outputs = "".join(formatted_outputs)
         cycle_instruction_section = _render_cycle_instruction(cycle_instruction)
+        synthesis_graph_context = await self._build_synthesis_graph_context(target_node)
 
         # Build synthesis system prompt
+        ancestry_chain = await self._build_ancestry_chain(target_node)
         system_prompt = f"""You are the Lead LLM synthesizing research for:
 
 {self.north_star}
 
-Multiple research agents investigated a direction independently. You will receive their
-raw outputs and must extract strategic DIRECTIONS to pursue next.
+## CRITICAL: You Are Building Children in a Tree Structure
+
+**Your synthesized directions will become CHILDREN of the target direction.**
+
+Current tree position (this is where you are in the hierarchy):
+{ancestry_chain}
+
+**Your output will be placed here:**
+  └─ Depth {target_node.depth + 1}: [YOUR SYNTHESIZED DIRECTIONS]
+
+This means:
+- You are NOT creating alternative directions at the same level as the target
+- You ARE creating the next level down in the hierarchy
+- Each direction you create MUST be MORE CONCRETE/SPECIFIC than the target direction
+- Think: if target says "WHAT", children should say "WHO/WHERE/WHEN/HOW"
+
+## MANDATORY Depth Progression (Non-Negotiable)
+
+**Before synthesizing each direction, verify:**
+
+1. **Specificity Test**: Is this direction MORE SPECIFIC than target?
+   - Target (depth {target_node.depth}): "{_compact_text(target_node.claim, max_chars=120)}"
+   - Proposed direction (depth {target_node.depth + 1}): "[your claim]"
+   - ✓ Drills deeper into target / ✗ Lateral topic jump / ✗ More abstract
+
+2. **Concreteness Level Required**:
+   - Depth 0→1: Target is strategic thesis → Output must be specific wedge + market segment
+   - Depth 1→2: Target is wedge + segment → Output must be specific buyer persona + workflow + measurable pain
+   - Depth 2→3: Target is buyer + workflow → Output must be named companies/people + procurement path + constraints
+   - Depth 3→4+: Target is named targets → Output must be execution-ready (meeting agenda, demo scope, integration steps)
+
+3. **Parent-Child Coherence**:
+   - Does this direction drill into an aspect OF the target?
+   - Or does it jump to a different but related topic? (❌ REJECT - that's a sibling, not a child)
+
+**RULE**: Reject any proposed direction that fails these tests. Revise until it's truly deeper/more concrete.
+
+## Concrete Examples: Good vs Bad Depth Progression
+
+**BAD** (lateral branching - same abstraction level):
+```
+Depth 1: "Chevron represents viable pilot customer for LLM fine-tuning services"
+  Depth 2: "Quantum molecular dynamics simulation..." ❌ DIFFERENT TOPIC!
+  Depth 2: "Noble AI competitive positioning" ❌ DIFFERENT TOPIC!
+  Depth 2: "Azure OpenAI limitations" ❌ LATERAL DETAIL, NOT DEEPER!
+```
+
+**GOOD** (drilling down - increasing concreteness):
+```
+Depth 0: "Industrial safety-critical AI adoption opportunity"
+  Depth 1: "Energy sector process engineering teams need ASME-compliant LLM tools"
+    Depth 2: "Chevron Project Designs engineers use Azure OpenAI for code gen, face hallucination risks costing $X/incident"
+      Depth 3: "Target: Luis Niño (CTV Director), demo ASME B31.3 verifier to ENGINE Center Bengaluru team; proof = pilot MOU by Q2 2026"
+        Depth 4: "Validate via: interview procurement Sarah Chen 555-0123; review Q3 2024 incident logs; benchmark vs Noble AI tool adoption rate"
+```
+
+**Another BAD Example** (going sideways or up):
+```
+Depth 2: "Chevron Project Designs has ASME compliance needs"
+  Depth 3: "LLM hallucinations are a general problem" ❌ MORE ABSTRACT!
+  Depth 3: "Microsoft also has engineering teams" ❌ DIFFERENT COMPANY!
+```
+
+**Another GOOD Example**:
+```
+Depth 2: "Chevron Project Designs needs ASME B31.3 compliance verification"
+  Depth 3: "Project Designs uses Azure OpenAI daily for piping specs; 15% hallucination rate causes 40hrs/month rework; team of 12 engineers in Houston HQ"
+    Depth 4: "Contact Alex Rodriguez (Lead Engineer, 281-555-0199); demo constraint-based verifier on live B31.3 spec; success = <5% error rate on benchmark suite"
+```
+
+## FORBIDDEN PATTERNS (Auto-Reject These)
+
+When synthesizing, immediately REJECT these anti-patterns:
+
+### ❌ Pattern 1: Different Person/Team Switch
+```
+Parent: "Target Justin Lo's Enterprise AI team"
+Child: "Target Bill Braun's engineering team"  ← WRONG! Different person = SIBLING, not child
+Child: "Target carbon sequestration team"      ← WRONG! Different team = SIBLING, not child
+```
+
+**Rule**: If parent mentions person/team X, children MUST drill into X (not switch to person/team Y).
+
+### ❌ Pattern 2: Aspect Enumeration (Creating List of Siblings)
+```
+Parent: "Deploy FNO-LoRA fine-tuning technology"
+Child 1: "Procurement path for FNO-LoRA"        ← These are all lateral aspects
+Child 2: "Competitive analysis vs NobleAI"      ← at the same abstraction level
+Child 3: "Legal validation of approach"        ← They are SIBLINGS to each other,
+Child 4: "Technical architecture details"      ← not children of the parent!
+Child 5: "Integration with Azure"
+Child 6: "Use case validation"
+```
+
+**Rule**: If you're creating a list of "aspects" or "approaches", you're creating SIBLINGS. Pick ONE aspect and drill into it.
+
+### ✅ Correct Pattern: Pick ONE Aspect and Drill
+```
+Parent: "Deploy FNO-LoRA fine-tuning technology"
+Child: "Validate FNO-LoRA efficacy using Volve field dataset to establish benchmark proof"
+  Grandchild: "Configure Azure ML pipeline for Volve dataset processing with 90% accuracy threshold"
+    Great-grandchild: "Execute benchmark run by Feb 28, 2026; document results in technical report for CTV"
+```
+
+### ❌ Pattern 3: Research Discovery Expansion
+If research about target X incidentally discovers information about Y, Z, and W:
+- ✓ Create directions drilling into X (the target)
+- ✗ Do NOT create directions for Y, Z, W (those are potential future targets, not children of X)
+
+**Rule**: Research discoveries are inputs for drilling deeper into the TARGET, not prompts to branch sideways.
+
+### ❌ Pattern 4: Topic Jump Under Same Parent
+```
+Parent: "Chevron Project Designs ASME B31.3 compliance needs"
+Child 1: "ASME B31.3 verification demo for Project Designs team"  ✓ Drills into parent
+Child 2: "Carbon capture reservoir simulation for different team" ✗ Different topic!
+Child 3: "Quantum optimization for LNG operations"                ✗ Different topic!
+```
+
+**Rule**: All children must share the core topic/entity of the parent. If topics diverge, that's breadth, not depth.
+
+### Detection Heuristic
+
+Before finalizing each direction, ask:
+1. Does this direction mention the same person/team/entity as the parent?
+2. Is this direction MORE SPECIFIC about the parent's topic?
+3. Or is this direction exploring a RELATED BUT DIFFERENT topic?
+
+If #3, REJECT IT. That's a sibling candidate for future cycles, not a child of this target.
+
+## Relationship Type Classification
+
+For EACH direction you synthesize, classify its relationship to the target direction.
+
+### "extends_parent" (default) - Sequential Depth Progression
+
+Use when the direction is a **logical next step** that drills deeper into the parent:
+- Same person/team/entity as parent
+- More concrete/specific execution of parent's approach
+- Answers "HOW" or "WHAT SPECIFICALLY" about parent
+- Cannot proceed without parent context
+
+**Examples:**
+- Parent: "Target Akshay Sahni at ENGINE Bengaluru"
+  - Child (extends): "Secure meeting with Sahni via Rice Alliance introduction" ✓
+  - Child (extends): "Draft ENGINE-specific pitch deck for Sahni" ✓
+
+- Parent: "Develop classical LoRA fine-tuning pipeline"
+  - Child (extends): "Configure rank-8 LoRA adapters for Volve dataset" ✓
+  - Child (extends): "Benchmark LoRA vs full fine-tuning on seismic data" ✓
+
+### "alternative_approach" - Different Strategic Path
+
+Use when the direction is a **fundamentally different approach** to achieving the same goal:
+- Different technical method for same outcome
+- Different market entry path for same customer
+- Different buyer persona for same value prop
+- Mutually exclusive with other approaches (pick one)
+
+**Examples:**
+- Parent: "Execute CTV Catalyst Program entry"
+  - Child (alternative): "Classical LoRA baseline pilot" ✓ (one approach)
+  - Child (alternative): "Quantum-ready OQC architecture pilot" ✓ (different approach)
+  - Child (alternative): "Direct sales to Jim Gable bypassing Catalyst" ✓ (different entry)
+
+- Parent: "Validate technical approach for Chevron"
+  - Child (alternative): "Volve dataset public benchmark" ✓ (one validation method)
+  - Child (alternative): "Proprietary Chevron seismic data pilot" ✓ (different method)
+
+**Key Test:**
+- If directions can/should be pursued **in parallel** or require **choosing between them** → `alternative_approach`
+- If direction must come **after** parent or **depends on** parent → `extends_parent`
 
 ## What Are Directions?
 
@@ -505,12 +986,17 @@ NOT directions (too granular):
 
 ## Synthesis Guidelines
 
-1. **Extract Directions**:
-   - Look for strategic questions, approaches, or hypotheses
-   - Group related findings into coherent directions
-   - Each direction should suggest a path of inquiry
+1. **Extract Directions** (that are children of target):
+   - Look for strategic questions, approaches, or hypotheses that DRILL DEEPER into the target
+   - **Group related findings about THE TARGET** into coherent directions
+     * "Related findings" = findings about the SAME entity/topic as the target
+     * NOT "findings about different but related entities" (those are siblings, not children!)
+   - Each direction should suggest a more specific path than the target
+   - **Critical Rule**: If research discovered info about multiple different people/teams/topics:
+     * Create directions for THE TARGET ONLY
+     * Other discoveries are candidates for FUTURE cycles, not children of this target
    - For each direction, provide:
-     - `claim`: concise one-line summary
+     - `claim`: concise one-line summary (MORE CONCRETE than target!)
      - `description`: long-form Markdown narrative (at least 220 words; target 350-700 words)
        - Use Markdown structure with short sections and bullets where helpful
        - Preserve meaningful line breaks between sections/points
@@ -522,17 +1008,15 @@ NOT directions (too granular):
      - `direction_outcome`: one of:
        - `pursue`: keep active for future investigation
        - `complete`: treat as sufficiently concluded/dead-end for now
-   - Prefer deepening or revising existing strategic paths when evidence supports that
-   - Propose genuinely new branches only when current evidence indicates clear unexplored opportunity
+   - STRONGLY prefer deepening existing paths over creating parallel branches
+   - Only create genuinely new branches when evidence reveals a distinct, non-overlapping sub-aspect
    - Do not branch for its own sake; avoid direction inflation
-   - Preserve depth-wise progression: child directions should usually be more concrete than the target direction
+   - EVERY direction must pass the specificity test above
 
-2. **Concreteness Ladder (By Target Depth)**:
-   - If target depth is 0, output should trend toward wedge/segment specificity
-   - If target depth is 1, output should trend toward buyer/workflow and measurable pains
-   - If target depth is 2, output should trend toward concrete accounts/companies and deployment constraints
-   - If target depth is 3+, output should trend toward execution-ready specificity (named targets, integration path, feasibility evidence)
-   - Avoid lateral rewording at the same abstraction level unless evidence is explicitly contradictory
+2. **Depth-Appropriate Concreteness**:
+   - Your output depth is {target_node.depth + 1}
+   - At this depth, directions should include the concreteness elements listed in "Concreteness Level Required" above
+   - Actively avoid lateral rewording at same abstraction level
 3. **Assess Confidence**:
    - Interpret confidence as confidence in THIS direction claim.
    - High (0.8-1.0): Strong corroboration for the claim
@@ -559,10 +1043,16 @@ NOT directions (too granular):
    - Keep conclusions evidence-grounded and avoid overfitting to a single narrative
 {cycle_instruction_section}
 
-8. **Branching Discipline**:
-   - You are not required to create multiple new directions every cycle
-   - It is valid to return a small set of focused directions if that best reflects the evidence
-   - Prioritize clarity and strategic utility over quantity
+8. **Branching Discipline & Child Count Limits**:
+   - **Default: Create 1-3 directions per cycle** (not 8-12!)
+   - **Maximum: 5 directions** only if there are genuinely distinct sub-aspects that ALL pass specificity test
+   - **Typical: 2 directions** that drill into different execution paths of the SAME target entity/topic
+   - You are NOT required to create multiple directions every cycle
+   - It is valid and often BETTER to return 1-2 highly focused directions
+   - Prioritize depth and clarity over quantity
+   - **Self-Check**: If you drafted >5 directions, review each:
+     * Does it drill into the TARGET (parent node)?
+     * Or does it explore a "related topic" discovered during research? (← REJECT those as future siblings)
 
 9. **Next Actions Must Be Winterfox-Executable**:
    - In each direction description, the `## Next Actions` section must include ONLY actions
@@ -582,26 +1072,32 @@ NOT directions (too granular):
      - Source targets: what source types to prioritize
      - Completion signal: explicit evidence threshold for considering the action done
 
-## Output Format
+10. **Duplicate Avoidance Against Existing Graph**:
+   - You will receive existing child directions under the target, plus sibling directions in the parent branch.
+   - Do NOT create a new direction that is materially the same as an existing child or sibling direction.
+   - Treat title-level paraphrases as duplicates if intent, scope, and decision objective overlap.
+   - If new evidence maps to an existing direction, deepen it with more concrete framing instead of creating a parallel duplicate.
+   - Only propose a truly new direction when it has a distinct decision objective and non-overlapping evidence plan.
+
+## Output Format (SIMPLIFIED)
 
 Respond with ONLY this JSON structure:
 {{
   "directions": [
     {{
       "claim": "Short summary (one line, <=120 chars)",
-      "description": "Markdown one-page narrative (target 350-700 words) with sections like ## Context, ## Evidence, ## Risks/Assumptions, ## Next Actions, where Next Actions are Winterfox-executable research tasks only",
+      "description": "Markdown narrative (target 250-400 words) with ONLY these 2 required sections:
+        - ## Proposal: What this direction proposes, why it matters, how it connects to parent, and key evidence supporting it (3-5 sentences)
+        - ## Next Actions: Winterfox-executable research tasks only (each with: objective, 2-5 query seed examples, source targets, completion signal)",
       "stance": "support|mixed|disconfirm",
       "direction_outcome": "pursue|complete",
+      "relationship_type": "extends_parent|alternative_approach",
       "confidence": 0.85,
       "importance": 0.9,
-      "reasoning": "Why this direction matters and what it builds on",
-      "evidence_summary": "Brief summary of supporting evidence",
-      "tags": ["tag1", "tag2"]
+      "reasoning": "Why this direction matters and what it builds on"
     }}
   ],
-  "synthesis_reasoning": "2-3 sentences on your synthesis approach",
-  "consensus_directions": ["Direction 1", "Direction 2"],
-  "contradictions": ["Contradiction 1", "Contradiction 2"]
+  "synthesis_reasoning": "2-4 sentences: (1) your synthesis approach, (2) why you limited to this number of directions, (3) what consensus/agreements you found across agents, (4) what contradictions/disagreements exist"
 }}
 
 Be strategic - extract directions that move research forward, not just facts."""
@@ -615,6 +1111,10 @@ Be strategic - extract directions that move research forward, not just facts."""
 ## Raw Research Outputs
 
 {combined_outputs}
+
+## Nearby Graph Context (Use To Avoid Duplicates)
+
+{synthesis_graph_context}
 
 ---
 
@@ -665,14 +1165,11 @@ Respond with ONLY the JSON structure (no markdown, no extra text).
                         confidence=0.5,
                         importance=0.7,
                         reasoning="Fallback direction (synthesis parse failed)",
-                        evidence_summary="Research agents completed investigation but synthesis failed to parse",
                         stance="mixed",
                         direction_outcome="pursue",
                     )
                 ],
                 synthesis_reasoning="Synthesis parse failed - using fallback direction",
-                consensus_directions=[],
-                contradictions=[],
             )
 
         try:
@@ -693,29 +1190,48 @@ Respond with ONLY the JSON structure (no markdown, no extra text).
                 if "direction_outcome" not in dir_data and stance == "disconfirm":
                     # Bias toward faithful closure when model explicitly disconfirms a claim.
                     outcome = "complete"
+                # Extract and validate relationship_type
+                relationship_type = str(dir_data.get("relationship_type", "extends_parent")).strip().lower()
+                if relationship_type not in {"extends_parent", "alternative_approach"}:
+                    relationship_type = "extends_parent"  # Default fallback
                 directions.append(Direction(
                     claim=dir_data["claim"],
                     description=description,
                     stance=stance,
                     direction_outcome=outcome,
+                    relationship_type=relationship_type,
                     confidence=float(dir_data["confidence"]),
                     importance=float(dir_data["importance"]),
                     reasoning=dir_data["reasoning"],
-                    evidence_summary=dir_data["evidence_summary"],
-                    tags=dir_data.get("tags", []),
+                    evidence_summary=dir_data.get("evidence_summary"),  # Optional
+                    tags=dir_data.get("tags"),  # Optional
                 ))
 
             result = DirectionSynthesis(
                 directions=directions,
                 synthesis_reasoning=synthesis_data.get("synthesis_reasoning", ""),
-                consensus_directions=synthesis_data.get("consensus_directions", []),
-                contradictions=synthesis_data.get("contradictions", []),
+                consensus_directions=synthesis_data.get("consensus_directions"),  # Optional
+                contradictions=synthesis_data.get("contradictions"),  # Optional
             )
 
+            # Programmatic child count limit (Phase 1 simplification)
+            if len(result.directions) > 5:
+                logger.warning(
+                    f"Synthesis produced {len(result.directions)} directions, limiting to top 5 by importance"
+                )
+                result.directions = sorted(
+                    result.directions,
+                    key=lambda d: d.importance,
+                    reverse=True
+                )[:5]
+
+            # Log only if consensus/contradictions present
+            consensus_count = len(result.consensus_directions) if result.consensus_directions else 0
+            contradictions_count = len(result.contradictions) if result.contradictions else 0
             logger.info(
-                f"Lead LLM extracted {len(directions)} directions, "
-                f"{len(result.consensus_directions)} consensus, "
-                f"{len(result.contradictions)} contradictions"
+                f"Lead LLM extracted {len(result.directions)} directions"
+                + (f", {consensus_count} consensus" if consensus_count else "")
+                + (f", {contradictions_count} contradictions" if contradictions_count else "")
             )
 
             return result
@@ -748,14 +1264,11 @@ Respond with ONLY the JSON structure (no markdown, no extra text).
                         confidence=0.5,
                         importance=0.7,
                         reasoning=f"Fallback direction (synthesis parse error: {e})",
-                        evidence_summary="Research agents completed investigation but synthesis failed to parse",
                         stance="mixed",
                         direction_outcome="pursue",
                     )
                 ],
-                synthesis_reasoning=f"Synthesis parse error: {e}",
-                consensus_directions=[],
-                contradictions=[],
+                synthesis_reasoning=f"Synthesis parse error: {e}. Research agents completed investigation but output could not be parsed.",
             )
 
     async def reassess_target_direction(
@@ -790,8 +1303,16 @@ Respond with ONLY the JSON structure (no markdown, no extra text).
                 for d in synthesis.directions[:12]
             ]
         )
-        consensus_preview = "\n".join(f"- {c}" for c in synthesis.consensus_directions[:10]) or "- none"
-        contradiction_preview = "\n".join(f"- {c}" for c in synthesis.contradictions[:10]) or "- none"
+        # Handle optional consensus_directions and contradictions (Phase 1 simplifications)
+        if synthesis.consensus_directions:
+            consensus_preview = "\n".join(f"- {c}" for c in synthesis.consensus_directions[:10])
+        else:
+            consensus_preview = "- none (see synthesis_reasoning for consensus info)"
+
+        if synthesis.contradictions:
+            contradiction_preview = "\n".join(f"- {c}" for c in synthesis.contradictions[:10])
+        else:
+            contradiction_preview = "- none (see synthesis_reasoning for contradiction info)"
 
         system_prompt = f"""You are the Lead LLM for this research mission:
 

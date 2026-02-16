@@ -276,11 +276,13 @@ class ResearchCycle:
                 target_node=target,
                 cycle_instruction=cycle_instruction,
             )
+            consensus_directions = synthesis.consensus_directions or []
+            contradictions = synthesis.contradictions or []
 
             logger.info(
                 f"[Cycle {self.cycle_id}] Synthesis: {len(synthesis.directions)} directions, "
-                f"{len(synthesis.consensus_directions)} consensus, "
-                f"{len(synthesis.contradictions)} contradictions"
+                f"{len(consensus_directions)} consensus, "
+                f"{len(contradictions)} contradictions"
             )
 
             # ═══════════════════════════════════════════════════════════
@@ -384,8 +386,8 @@ class ResearchCycle:
                 target_claim=target.claim,
                 directions_created=merge_stats["created"],
                 directions_updated=merge_stats["updated"],
-                consensus_directions=synthesis.consensus_directions,
-                contradictions=synthesis.contradictions,
+                consensus_directions=consensus_directions,
+                contradictions=contradictions,
                 total_cost_usd=total_cost,
                 lead_llm_cost_usd=lead_llm_cost,
                 research_cost_usd=research_cost,

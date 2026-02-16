@@ -169,6 +169,25 @@ class CycleExportService:
 
 """]
 
+        # Relationship breakdown (if available)
+        merge_stats = cycle.get("merge_stats", {})
+        if isinstance(merge_stats, str):
+            try:
+                import json
+                merge_stats = json.loads(merge_stats)
+            except (json.JSONDecodeError, ValueError):
+                merge_stats = {}
+
+        breakdown = merge_stats.get("relationship_breakdown", {})
+        if breakdown and (breakdown.get("extended_parent") or breakdown.get("alternative_approaches")):
+            extended = breakdown.get("extended_parent", 0)
+            alternatives = breakdown.get("alternative_approaches", 0)
+            sections.append(f"""**Relationship Breakdown:**
+- Extended parent (sequential depth): {extended}
+- Alternative approaches (siblings): {alternatives}
+
+""")
+
         # Consensus findings
         consensus = cycle.get("consensus_findings", [])
         if consensus:

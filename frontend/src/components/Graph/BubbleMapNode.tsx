@@ -42,6 +42,7 @@ const BubbleMapNode: React.FC<NodeProps<BubbleNodeData>> = ({ data }) => {
   const width = 286;
   const confidencePct = clamp(Math.round(data.confidence * 100), 0, 100);
   const importancePct = clamp(Math.round(data.importance * 100), 0, 100);
+  const isHighSignal = confidencePct >= 85 && importancePct >= 85;
   const confidenceHeight = Math.max(5, (confidencePct / 100) * METRIC_HEIGHT);
   const importanceHeight = Math.max(5, (importancePct / 100) * METRIC_HEIGHT);
   const label = parsed.claim.length > 120 ? `${parsed.claim.slice(0, 120)}...` : parsed.claim;
@@ -69,6 +70,8 @@ const BubbleMapNode: React.FC<NodeProps<BubbleNodeData>> = ({ data }) => {
               ? 'border-cyan-500 bg-card shadow-[0_0_0_1px_rgba(6,182,212,0.35)]'
               : data.matched
                 ? 'border-amber-500 bg-card shadow-[0_0_0_1px_rgba(245,158,11,0.38)]'
+                : isHighSignal
+                  ? 'border-4 border-green-500 bg-card'
                 : data.focused
                   ? 'border-slate-400 bg-card'
                   : 'border-border bg-card group-hover:border-slate-400'

@@ -129,9 +129,8 @@ async def test_select_direction_success():
     )
 
     # Execute
-    with patch("winterfox.orchestrator.lead.render_summary_view", return_value="Graph summary"):
-        with patch("winterfox.orchestrator.lead.render_weakest_nodes", return_value="Weakest nodes"):
-            target, reasoning = await lead.select_direction()
+    with patch("winterfox.graph.views.render_summary_view", new=AsyncMock(return_value="Graph summary")):
+        target, reasoning = await lead.select_direction()
 
     # Verify
     assert target.id == "node_1"
@@ -158,9 +157,8 @@ async def test_select_direction_partial_id_match():
 
     lead = LeadLLM(adapter=adapter, graph=graph, north_star="Test")
 
-    with patch("winterfox.orchestrator.lead.render_summary_view", return_value="Summary"):
-        with patch("winterfox.orchestrator.lead.render_weakest_nodes", return_value="Weak"):
-            target, reasoning = await lead.select_direction()
+    with patch("winterfox.graph.views.render_summary_view", new=AsyncMock(return_value="Summary")):
+        target, reasoning = await lead.select_direction()
 
     # Should match by prefix
     assert target.id == "abc123def456"
@@ -181,9 +179,8 @@ async def test_select_direction_fallback_invalid_json():
 
     lead = LeadLLM(adapter=adapter, graph=graph, north_star="Test")
 
-    with patch("winterfox.orchestrator.lead.render_summary_view", return_value="Summary"):
-        with patch("winterfox.orchestrator.lead.render_weakest_nodes", return_value="Weak"):
-            target, reasoning = await lead.select_direction()
+    with patch("winterfox.graph.views.render_summary_view", new=AsyncMock(return_value="Summary")):
+        target, reasoning = await lead.select_direction()
 
     # Should fall back to first node
     assert target.id == "fallback_node"
@@ -208,9 +205,8 @@ async def test_select_direction_fallback_invalid_node_id():
 
     lead = LeadLLM(adapter=adapter, graph=graph, north_star="Test")
 
-    with patch("winterfox.orchestrator.lead.render_summary_view", return_value="Summary"):
-        with patch("winterfox.orchestrator.lead.render_weakest_nodes", return_value="Weak"):
-            target, reasoning = await lead.select_direction()
+    with patch("winterfox.graph.views.render_summary_view", new=AsyncMock(return_value="Summary")):
+        target, reasoning = await lead.select_direction()
 
     # Should fall back to first node
     assert target.id == "valid_node"
@@ -240,9 +236,8 @@ async def test_select_direction_with_report_context():
         report_content="This is a research report with important context" * 100,  # Long report
     )
 
-    with patch("winterfox.orchestrator.lead.render_summary_view", return_value="Summary"):
-        with patch("winterfox.orchestrator.lead.render_weakest_nodes", return_value="Weak"):
-            target, reasoning = await lead.select_direction()
+    with patch("winterfox.graph.views.render_summary_view", new=AsyncMock(return_value="Summary")):
+        target, reasoning = await lead.select_direction()
 
     # Verify report content was included in prompt
     assert "Current Research Report" in adapter.last_user_prompt
@@ -258,13 +253,11 @@ async def test_select_direction_empty_graph_raises():
 
     lead = LeadLLM(adapter=adapter, graph=graph, north_star="Test")
 
-    with patch("winterfox.orchestrator.lead.render_summary_view", return_value="Summary"):
-        with patch("winterfox.orchestrator.lead.render_weakest_nodes", return_value="Weak"):
-            with pytest.raises(ValueError, match="No active nodes"):
-                await lead.select_direction()
+    with patch("winterfox.graph.views.render_summary_view", new=AsyncMock(return_value="Summary")):
+        with pytest.raises(ValueError, match="No active nodes"):
+            await lead.select_direction()
 
 
-@pytest.mark.asyncio
 async def test_dispatch_research_success():
     """Test Lead LLM dispatches research agents successfully."""
     adapter = MockAdapter()
@@ -283,8 +276,8 @@ async def test_dispatch_research_success():
 
     tools = []  # Mock tools
 
-    with patch("winterfox.orchestrator.lead.render_focused_view", return_value="Focused view"):
-        outputs = await lead.dispatch_research(
+    with patch("winterfox.graph.views.render_focused_view", new=AsyncMock(return_value="Focused view")):
+        result = await lead.dispatch_research(
             target_node=target_node,
             research_agents=[agent1, agent2],
             tools=tools,
@@ -292,9 +285,9 @@ async def test_dispatch_research_success():
         )
 
     # Verify
-    assert len(outputs) == 2
-    assert outputs[0].agent_name == "agent-1"
-    assert outputs[1].agent_name == "agent-2"
+    assert len(result.outputs) == 2
+    assert result.outputs[0].agent_name == "agent-1"
+    assert result.outputs[1].agent_name == "agent-2"
     assert agent1.call_count == 1
     assert agent2.call_count == 1
 
@@ -324,8 +317,8 @@ async def test_dispatch_research_agent_failure_continues():
 
     lead = LeadLLM(adapter=adapter, graph=graph, north_star="Test")
 
-    with patch("winterfox.orchestrator.lead.render_focused_view", return_value="Focused"):
-        outputs = await lead.dispatch_research(
+    with patch("winterfox.graph.views.render_focused_view", new=AsyncMock(return_value="Focused")):
+        result = await lead.dispatch_research(
             target_node=target_node,
             research_agents=[agent1, agent2],
             tools=[],
@@ -333,8 +326,8 @@ async def test_dispatch_research_agent_failure_continues():
         )
 
     # Should continue with successful agent
-    assert len(outputs) == 1
-    assert outputs[0].agent_name == "agent-1"
+    assert len(result.outputs) == 1
+    assert result.outputs[0].agent_name == "agent-1"
 
 
 @pytest.mark.asyncio
@@ -353,7 +346,7 @@ async def test_dispatch_research_all_fail_raises():
 
     lead = LeadLLM(adapter=adapter, graph=graph, north_star="Test")
 
-    with patch("winterfox.orchestrator.lead.render_focused_view", return_value="Focused"):
+    with patch("winterfox.graph.views.render_focused_view", new=AsyncMock(return_value="Focused")):
         with pytest.raises(ValueError, match="All research agents failed"):
             await lead.dispatch_research(
                 target_node=target_node,
